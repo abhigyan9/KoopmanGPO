@@ -131,9 +131,9 @@ class GPObservable:
 
         # Ensure hyperparameter lists are set correctly
         self.hp1_list = hp1_list if hp1_list is not None else [torch.tensor(
-            1.0, requires_grad=True, device=self.device)] * len(kernel_types)
+            1.0, requires_grad=True, device=self.device) for _ in kernel_types]
         self.hp2_list = hp2_list if hp2_list is not None else [torch.tensor(
-            1.0, requires_grad=True, device=self.device)] * len(kernel_types)
+            1.0, requires_grad=True, device=self.device) for _ in kernel_types]
 
         if len(self.hp1_list) != len(kernel_types) or len(self.hp2_list) != len(kernel_types):
             raise ValueError(
@@ -165,8 +165,8 @@ class GPObservable:
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                   combination=self.combination)
         # self.Kxx += 1e-6 * torch.eye(self.Kxx.shape[0], device=self.device)
-        self.invKxx = torch.linalg.inv(
-            self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
+        # self.invKxx = torch.linalg.inv(
+        #    self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
         # self.invKxx = torch.cholesky_inverse(torch.linalg.cholesky(
         #    self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device)))
 
@@ -211,6 +211,10 @@ class GPObservable:
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
                 "Training data not found. Please call trainGP before optimizing hyperparameters.")
+
+        self.hp1_list = [hp.detach().requires_grad_() for hp in self.hp1_list]
+        self.hp2_list = [hp.detach().requires_grad_() for hp in self.hp2_list]
+        self.noise = self.noise.detach().requires_grad_()
 
         optimizer = torch.optim.Adam(
             self.hp1_list + self.hp2_list + [self.noise], lr=lr)

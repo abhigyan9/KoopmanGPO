@@ -82,8 +82,14 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
     x = torch.zeros((n, num_steps))
     y = torch.zeros((m, num_steps))
 
-    x[:, 0] = x0
-    y[:, 0] = C @ x0
+    if x0.dim() == 1:
+        x[:, 0] = x0
+        y[:, 0] = C @ x0
+    elif x0.dim() == 2:
+        x[:, 0] = x0[:, 0]
+        y[:, 0] = C @ x0[:, 0]
+    else:
+        raise ValueError('Expected x0 to be a 2D tensor')
 
     if not ts == (0.):
         Ad = torch.linalg.matrix_exp(A * ts)
@@ -100,7 +106,7 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
         return x, y
     else:
         if x0cv.shape[0] is not n or x0cv.shape[1] is not n:
-            return ValueError('Expected x0cv to be a 2D tensor of shape (n,n)')
+            raise ValueError('Expected x0cv to be a 2D tensor of shape (n,n)')
 
         xcv = torch.zeros((n, n, num_steps))
         ycv = torch.zeros((m, m, num_steps))
