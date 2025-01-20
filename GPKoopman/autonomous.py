@@ -75,7 +75,7 @@ def sim_RK4(fx, x0, ts, num_steps, params=torch.tensor([1.])):
 def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
     # Forward stepping simulation of linear time-invariant system
     # Continuous time simulation by default
-    # If A and C are discrete-time matrices, set ts=0.
+    # If A and C are discrete-time matrices, set ts=None
     # Expect x0cv to be a tensor of shape (n,n)
     m, n = C.shape  # n = number of states, m = number of outputs
 
@@ -91,7 +91,7 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
     else:
         raise ValueError('Expected x0 to be a 2D tensor')
 
-    if not ts == (0.):
+    if not ts is None:
         Ad = torch.linalg.matrix_exp(A * ts)
     else:
         Ad = A
