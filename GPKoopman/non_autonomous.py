@@ -1,8 +1,49 @@
 # Methods for Non-Autonomous System definition and simulation
 import torch
 
+# Duffing Oscillator with Control
 
-def sim_RK4_nonautonomous(fx, x0, ts, num_steps, u, params=torch.tensor([1.])):
+
+def fc_DO(x, u, params=None):
+    # params.device = x.device
+    if params is None:
+        params = torch.tensor([-0.2, 4., -1., 1.])
+
+    dx0 = x[1]
+    dx1 = params[0] * x[1] + params[1] * x[0] + params[2] * x[0] ** 3 + u
+    return torch.tensor([dx0, dx1], dtype=torch.float64, device=x.device)
+
+
+# Nonlinear Simpled Damped Pendulum with Control
+def fc_SDP(x, u, params=None):
+    # Common param names = length, damping coefficient
+    if params is None:
+        params = torch.tensor([1., 0.2])
+
+    g = 9.81
+    dx0 = x[1]
+    dx1 = -(g/params[0]) * torch.sin(x[0]) - params[1] * x[1] + u
+    return torch.tensor([dx0, dx1], dtype=torch.float64)
+
+
+# Inverted Pendulum on a cart with horizontal force on cart
+def fc_PoC(x, u, params=None):
+    if params is None:
+        params = torch.tensor([0.4, 1., 9.81, 0.5, 6., 0.1/12])
+
+    m, M, g, l, b, I = params
+    sigma = -(l * m * torch.cos(x[0])) ** 2 + \
+        (m * l) ** 2 + (m * M * l ** 2) + I * (m + M)
+    dx0 = x[1]
+    dx1 = m * l * ((u - b * x[3]) * torch.cos(x[0]) + (m + M) * g * torch.sin(
+        x[0]) - 0.5 * m * l * (x[1] ** 2) * torch.sin(2 * x[0])) / sigma
+    dx2 = x[3]
+    dx3 = (u * (I + m * l ** 2) - I * b * x[3] - l * ((m * l) ** 2 + I * m) * torch.sin(
+        x[0]) * (x[1] ** 2) - b * m * x[3] * (l ** 2) + 0.5 * g * torch.sin(2 * x[0]) * ((m * l) ** 2)) / sigma
+    return torch.tensor([dx0, dx1, dx2, dx3], dtype=torch.float64, device=x.device)
+
+
+def sim_RK4_nonautonomous(fx, x0, ts, num_steps, u, params=None):
     """
     Runge-Kutta 4th Order Simulation for Non-Autonomous Dynamic Systems
 
@@ -72,7 +113,8 @@ def sim_LTI_nonautonomous(x0, A, B, C, u, num_steps, ts=0.01, disc='analytic', x
     if not ts is None:
         if disc == 'analytic':
             Ad = torch.linalg.matrix_exp(A * ts)
-            Bd = torch.linalg.solve(A, (Ad - torch.eye(n)) @ B)
+            Bd = torch.linalg.solve(
+                A, (Ad - torch.eye(n, device=A.device)) @ B)
         else:
             Ad = A * ts + torch.eye(n, device=A.device)
             Bd = B * ts
