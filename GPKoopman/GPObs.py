@@ -170,6 +170,22 @@ class GPObservable:
         # self.invKxx = torch.cholesky_inverse(torch.linalg.cholesky(
         #    self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device)))
 
+        # # Check if the matrix is positive definite using eigenvalues
+        # eigenvalues = torch.linalg.eigvalsh(
+        #     self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
+        # if torch.all(eigenvalues > 0):
+        #     # Matrix is positive definite, proceed with Cholesky
+        #     L = torch.linalg.cholesky(
+        #         self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
+        #     self.invKxx = torch.cholesky_inverse(L)
+        # else:
+        #     # Matrix is not positive definite, fallback to SVD
+        #     U, S, V = torch.linalg.svd(
+        #         self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     self.invKxx = V.T @ S_inv @ U.T
+
         try:
             L = torch.linalg.cholesky(
                 self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
