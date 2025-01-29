@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 def plot_trajectories_and_inputs(system_name, x_idx1, x_idx2, title):
     # Load data
-    data = torch.load(f"Data/{system_name}_data.pt")
+    data = torch.load(f"Data/{system_name}_data.pt", weights_only=True)
 
     # Shape: (num_trajectories, state_dim, num_steps)
     trajectories = data["trajectories"]
@@ -30,8 +30,8 @@ def plot_trajectories_and_inputs(system_name, x_idx1, x_idx2, title):
         plt.plot(x1[0], x2[0], 'o', color='red')
 
     plt.title(f"{title}: Phase Plot")
-    plt.xlabel(f"x[{x_idx1}]")
-    plt.ylabel(f"x[{x_idx2}]")
+    plt.xlabel(f"x{x_idx1+1}")
+    plt.ylabel(f"x{x_idx2+1}")
     plt.grid()
 
     # Plot input sequences
@@ -49,7 +49,8 @@ def plot_trajectories_and_inputs(system_name, x_idx1, x_idx2, title):
     plt.grid()
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f'Plots/ForcedPlot_{system_name}.png',
+                dpi=300, bbox_inches='tight')
 
 
 if __name__ == "__main__":

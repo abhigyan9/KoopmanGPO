@@ -2,59 +2,68 @@
 import torch
 
 
-def f_UDO(x, params=torch.tensor([1., 1., 1.])):
+def f_UDO(x, params=None):
     # Common param names = alpha, beta, delta
     # Single attractor for alpha > 0
-    # Default Duffing Oscillator for studies = [-1., 4., 0.]
+    # Clemson Duffing Oscillator = [1., -4., 0.]
+    # General Oscillator setting is [1., 1., 1.]
+    if params is None:
+        params = torch.tensor([-4., 1., 0.])
     dx0 = x[1]
     dx1 = -params[0] * x[0] - params[1] * (x[0]**3) - params[2] * x[1]
     return torch.tensor([dx0, dx1], dtype=torch.float64)
 
 
-def f_VDP(x, params=torch.tensor([1.])):
+def f_VDP(x, params=None):
     # Common param names = mu
+    if params is None:
+        params = torch.tensor([1.])
     dx0 = x[1]
     dx1 = params[0]*(1-x[0]**2)*x[1] - x[0]
     return torch.tensor([dx0, dx1], dtype=torch.float64)
 
 
-def f_SDP(x, params=torch.tensor([1., 0.2])):
+def f_SDP(x, params=None):
     # Common param names = length, damping coefficient
+    if params is None:
+        params = torch.tensor([1., 0.2])
     g = 9.81
     dx0 = x[1]
     dx1 = -(g/params[0]) * torch.sin(x[0]) - params[1] * x[1]
     return torch.tensor([dx0, dx1], dtype=torch.float64)
 
 
-def f_Lorenz(x, params=torch.tensor([10., 8./3., 28.])):
+def f_Lorenz(x, params=None):
     # Common param names = sigma, beta, rho
+    if params is None:
+        params = torch.tensor([10., 8./3., 28.])
     dx0 = params[0] * (x[1] - x[0])
     dx1 = x[0] * (params[2] - x[2]) - x[1]
     dx2 = x[0] * x[1] - params[1] * x[2]
     return torch.tensor([dx0, dx1, dx2], dtype=torch.float64)
 
 
-def f_LotkaVolterra(x, params=torch.tensor([2./3., 4./3., 1., 1.])):
+def f_LotkaVolterra(x, params=None):
     # Common param names = alpha, beta, gamma, delta
+    if params is None:
+        params = torch.tensor([2./3., 4./3., 1., 1.])
     dx0 = params[0] * x[0] - params[1] * x[0] * x[1]
     dx1 = -params[2] * x[1] + params[3] * x[0] * x[1]
     return torch.tensor([dx0, dx1], dtype=torch.float64)
 
 
 def f_PWL1(x, params=None):
-    a = 0.31
-    b = 0.94
-    c = -3.
-    xs = 0.32
+    if params is None:
+        params = torch.tensor([0.31, 0.94, -3., 0.32])
     if x[0] < 0.:
-        dx0 = c * x[0] - c * xs - x[0]
+        dx0 = params[2] * x[0] - params[2] * params[3] - x[0]
     else:
-        dx0 = b * x[0] + a - b * x[0] - x[0]
+        dx0 = params[1] * x[0] + params[0] - params[1] * x[0] - x[0]
 
     return torch.tensor([dx0], dtype=torch.float64)
 
 
-def sim_RK4(fx, x0, ts, num_steps, params=torch.tensor([1.])):
+def sim_RK4(fx, x0, ts, num_steps, params=None):
     n = x0.shape[0]
     states = torch.zeros((n, num_steps), dtype=torch.float64)
     states[:, 0] = x0

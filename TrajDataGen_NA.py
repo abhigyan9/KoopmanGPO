@@ -8,7 +8,7 @@ np.random.seed(1234)
 
 # Simulation parameters
 ts = 0.01  # Time step
-num_steps = 500  # Number of steps
+num_steps = 200  # Number of steps
 num_trajectories = 100  # Number of random initial conditions
 
 # Function to generate random initial conditions
@@ -18,7 +18,7 @@ def generate_initial_conditions(system):
     if system == "Duffing":
         return torch.tensor(np.random.uniform(-2, 2, size=(2,)), dtype=torch.float64)
     elif system == "Pendulum":
-        return torch.tensor(np.random.uniform([-np.pi, -1], [np.pi, 1], size=(2,)), dtype=torch.float64)
+        return torch.tensor(np.random.uniform([-2, -3], [2, 3], size=(2,)), dtype=torch.float64)
     elif system == "Cart":
         return torch.tensor(np.random.uniform([-np.pi, -1, -2, -1], [np.pi, 1, 2, 1], size=(4,)), dtype=torch.float64)
 
