@@ -176,6 +176,16 @@ def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
         # Increment iteration
         iter += 1
 
+    plt.figure(figsize=(8, 6))
+    plt.plot(cost_history, label="Cost")
+    plt.title("Cost History")
+    plt.xlabel("Iteration")
+    plt.ylabel("Cost")
+    plt.legend()
+    plt.grid()
+    plt.savefig(
+        f'Plots/{system_name}/CostHistory_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+
     # Post Process Optimization Results
     optimal_Z = Z.detach()
     for i in range(p):
@@ -359,6 +369,8 @@ def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
     plt.savefig(f'Plots/{system_name}/MatrixPlot_{system_name}_p{
                 p}_l{l}.png', dpi=300, bbox_inches='tight')
 
+    plt.close('all')    # Close all matplotlib figures to conserve memory
+
     # Save model
     GPKmodel = {
         "ObsManager": ObsManager,
@@ -375,8 +387,8 @@ def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
     print(f'Model saved to Models/GPKModelAuto_{system_name}_p{p}_l{l}.pt')
 
     # Garbage collection inside the function
-    gc.collect()
-    torch.cuda.empty_cache()
+    gc.collect()                # clear unreferenced objects from memory
+    torch.cuda.empty_cache()    # clear PyTorch GPU memory
 
     pass
 
@@ -390,10 +402,18 @@ def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
 
 if __name__ == "__main__":
 
-    for i in range(1, 5):   # Iterating through number of observables
-        for j in range(1, 4):   # Iterating through decision horizon
-            get_iGPOK("Simple Pendulum", p=5*i, l=10*(j+1), clipto=150)
-            get_iGPOK("Unforced Duffing", p=5*i, l=10*(j+1), clipto=150)
-            get_iGPOK("van der Pol", p=5*i, l=10*(j+1), clipto=150)
-            get_iGPOK("Lotka Volterra", p=5*i, l=10*(j+1), clipto=150)
+    for i in range(1, 4):   # Iterating through decision horizon
+        for j in range(1, 5):   # Iterating through decision horizon
+            clip = 150
+            # Decision Horizon steps of 5, 10, 15 % of N
+            l = math.floor(0.05*clip*i)
+            p = 5*j
+            print(
+                f'Starting iGPK model building for all systems with p={p}, l={l}')
+            get_iGPOK("Simple Pendulum", p=p, l=l, clipto=150)
+            get_iGPOK("Unforced Duffing", p=p, l=l, clipto=150)
+            get_iGPOK("van der Pol", p=p, l=l, clipto=150)
+            get_iGPOK("Lotka Volterra", p=p, l=l, clipto=150)
             # get_iGPOK("Lorenz", p=5*i, l=10*(j+1))
+            print(
+                f'Finished iGPK model building for all systems with current parameters.')
