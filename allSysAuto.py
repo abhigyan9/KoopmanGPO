@@ -6,6 +6,7 @@ import matplotlib as mpl
 from mpl_toolkits.mplot3d import Axes3D
 from IPython.display import display, clear_output
 import math
+import gc
 
 
 def get_cost(Z, X, Xplus, Xtrain, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda3=1.0):
@@ -93,19 +94,21 @@ def compute_metrics(Xhat, Xcvhat, SimData, nTraj, N, eps=1e-6):
     return RMSE
 
 
-def get_iGPOK(system_name, p, l, max_iter=None):
+def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
     # Explanation
 
     # Load train and test datasets based on system_name
     data = torch.load(f'Data/DataAuto_{system_name}.pt', weights_only=True)
     # Shape: (num_trajectories, state_dim, num_steps)
     SimData = data['trajectories']
-    # dtype = torch.float32 to save memory | reduces accuracy
-    SimData = SimData.float()
+    SimData = SimData.float()   # dtype = torch.float32 to save memory | reduces accuracy
     ts = data['sample_time']
     num_trajectories = data['num_trajectories']
     nx = SimData.shape[1]
     N = data['num_steps']
+    if clipto is not None:
+        SimData = SimData[:, :, :clipto+1]
+        N = clipto
 
     # Assuming 100 trajectories, 80 : training, 20 : test
     # Training Set = 80 trajectories
@@ -233,7 +236,7 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     XcvhatTrain, XcvhatTest = XcvhatTrain.detach(), XcvhatTest.detach()
 
     # Training Trajectory Phase Plot
-    plt.figure(1, figsize=(8, 6))
+    plt.figure(figsize=(8, 6))
     plt.plot(XhatTrain[idx, 0, :], XhatTrain[idx, 1, :], label='iGPK')
     plt.plot(SimData[idx, 0, :N], SimData[idx, 1, :N],
              label='Nonlinear', linestyle='--')
@@ -244,10 +247,10 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     plt.legend()
     plt.grid()
     plt.savefig(
-        f'Plots/PhasePlotTrain_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+        f'Plots/{system_name}/PhasePlotTrain_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
 
     # Training Trajectory Time Plot with uncertainty bound
-    plt.figure(2, figsize=(8, 6))
+    plt.figure(figsize=(8, 6))
     plt.fill_between(time, XhatTrain[idx, 0, :] - 3 * XcvhatTrain[idx, 0, 0, :] ** 0.5,
                      XhatTrain[idx, 0, :] + 3 * XcvhatTrain[idx, 0, 0, :] ** 0.5, alpha=0.3, color='blue')
     plt.fill_between(time, XhatTrain[idx, 1, :] - 3 * XcvhatTrain[idx, 1, 1, :] ** 0.5,
@@ -262,10 +265,10 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     plt.legend()
     plt.grid()
     plt.savefig(
-        f'Plots/TimePlotTrain_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+        f'Plots/{system_name}/TimePlotTrain_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
 
     # Test Trajectory Plot
-    plt.figure(3, figsize=(8, 6))
+    plt.figure(figsize=(8, 6))
     plt.plot(XhatTest[idx, 0, :], XhatTest[idx, 1, :], label='iGPK')
     plt.plot(SimData[nTrain+idx, 0, :N], SimData[nTrain +
              idx, 1, :N], label='Nonlinear', linestyle='--')
@@ -276,10 +279,10 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     plt.legend()
     plt.grid()
     plt.savefig(
-        f'Plots/PhasePlotTest_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+        f'Plots/{system_name}/PhasePlotTest_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
 
     # Test Trajectory Time Plot with uncertainty bound
-    plt.figure(4, figsize=(8, 6))
+    plt.figure(figsize=(8, 6))
     plt.fill_between(time, XhatTest[idx, 0, :] - 3 * XcvhatTest[idx, 0, 0, :] ** 0.5,
                      XhatTest[idx, 0, :] + 3 * XcvhatTest[idx, 0, 0, :] ** 0.5, alpha=0.3, color='blue')
     plt.fill_between(time, XhatTest[idx, 1, :] - 3 * XcvhatTest[idx, 1, 1, :] ** 0.5,
@@ -294,7 +297,7 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     plt.legend()
     plt.grid()
     plt.savefig(
-        f'Plots/TimePlotTest_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+        f'Plots/{system_name}/TimePlotTest_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
 
     # RMSE Plot
     # Compute metrics for training set
@@ -325,7 +328,7 @@ def get_iGPOK(system_name, p, l, max_iter=None):
 
     plt.tight_layout()
     plt.savefig(
-        f'Plots/ErrorPlot_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
+        f'Plots/{system_name}/ErrorPlot_{system_name}_p{p}_l{l}.png', dpi=300, bbox_inches='tight')
 
     # A Matrix Eigenvalues and Heatmap
     eigval = torch.linalg.eigvals(A)
@@ -353,6 +356,9 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     axes[1].set_xlabel("Columns")
     axes[1].set_ylabel("Rows")
 
+    plt.savefig(f'Plots/{system_name}/MatrixPlot_{system_name}_p{
+                p}_l{l}.png', dpi=300, bbox_inches='tight')
+
     # Save model
     GPKmodel = {
         "ObsManager": ObsManager,
@@ -368,6 +374,10 @@ def get_iGPOK(system_name, p, l, max_iter=None):
     torch.save(GPKmodel, f"Models/GPKModelAuto_{system_name}_p{p}_l{l}.pt")
     print(f'Model saved to Models/GPKModelAuto_{system_name}_p{p}_l{l}.pt')
 
+    # Garbage collection inside the function
+    gc.collect()
+    torch.cuda.empty_cache()
+
     pass
 
 # Allowed system names -
@@ -380,10 +390,10 @@ def get_iGPOK(system_name, p, l, max_iter=None):
 
 if __name__ == "__main__":
 
-    for i in range(1, 6):   # Iterating through number of observables
+    for i in range(1, 5):   # Iterating through number of observables
         for j in range(1, 4):   # Iterating through decision horizon
-            get_iGPOK("Simple Pendulum", p=5*i, l=10*(j+1))
-            get_iGPOK("Unforced Duffing", p=5*i, l=10*(j+1))
-            get_iGPOK("van der Pol", p=5*i, l=10*(j+1))
-            get_iGPOK("Lotka Volterra", p=5*i, l=10*(j+1))
+            get_iGPOK("Simple Pendulum", p=5*i, l=10*(j+1), clipto=150)
+            get_iGPOK("Unforced Duffing", p=5*i, l=10*(j+1), clipto=150)
+            get_iGPOK("van der Pol", p=5*i, l=10*(j+1), clipto=150)
+            get_iGPOK("Lotka Volterra", p=5*i, l=10*(j+1), clipto=150)
             # get_iGPOK("Lorenz", p=5*i, l=10*(j+1))
