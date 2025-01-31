@@ -387,6 +387,9 @@ def get_iGPOK(system_name, p, l, max_iter=None, clipto=None):
     print(f'Model saved to Models/GPKModelAuto_{system_name}_p{p}_l{l}.pt')
 
     # Garbage collection inside the function
+    Z = Z.detach()
+    del X, Xplus, Xtrain, ObsManager, optimizer, Z, SimData, optimal_Z
+    del XhatTrain, XhatTest, XcvhatTrain, XcvhatTest
     gc.collect()                # clear unreferenced objects from memory
     torch.cuda.empty_cache()    # clear PyTorch GPU memory
 
@@ -411,9 +414,13 @@ if __name__ == "__main__":
             print(
                 f'Starting iGPK model building for all systems with p={p}, l={l}')
             get_iGPOK("Simple Pendulum", p=p, l=l, clipto=150)
+            torch.cuda.empty_cache()
             get_iGPOK("Unforced Duffing", p=p, l=l, clipto=150)
+            torch.cuda.empty_cache()
             get_iGPOK("van der Pol", p=p, l=l, clipto=150)
+            torch.cuda.empty_cache()
             get_iGPOK("Lotka Volterra", p=p, l=l, clipto=150)
+            torch.cuda.empty_cache()
             # get_iGPOK("Lorenz", p=5*i, l=10*(j+1))
             print(
                 f'Finished iGPK model building for all systems with current parameters.')
