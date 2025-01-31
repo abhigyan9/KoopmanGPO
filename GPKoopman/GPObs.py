@@ -110,7 +110,7 @@ def KernelFunction(X1, X2=None, kernel_types=['Gaussian'], hp1_list=None, hp2_li
 class GPObservable:
     count = 0
 
-    def __init__(self, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
+    def __init__(self, d, ns, m=200, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
                  noise=2e-8, combination='sum', device='cuda:0'):
         """
         Gaussian Process Observable with customizable kernel functions.
