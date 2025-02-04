@@ -110,8 +110,8 @@ def KernelFunction(X1, X2=None, kernel_types=['Gaussian'], hp1_list=None, hp2_li
 class GPObservable:
     count = 0
 
-    def __init__(self, d, ns, m=200, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
-                 noise=2e-8, combination='sum', device='cuda:0'):
+    def __init__(self, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
+                 noise=2e-8, combination='sum', device='cuda:0', m=200):
         """
         Gaussian Process Observable with customizable kernel functions.
 
@@ -141,10 +141,14 @@ class GPObservable:
 
         self.noise = torch.tensor(
             noise, requires_grad=True, device=self.device)
-        self.Kxx = torch.empty((ns, ns), device=self.device)
-        self.invKxx = torch.empty((ns, ns), device=self.device)
+        self.m = min(m, ns)
+        # self.idx_SOR = torch.linspace(0, ns-1, m).int()
+        self.idx_SOR = torch.linspace(0, ns-1, m).int()
+        self.Xm = torch.empty((m, m), device=self.device)
+        self.Knm = torch.empty((ns, m), device=self.device)
         self.y = torch.empty((ns, 1), device=self.device)  # Target values
-
+        # SOR trained coefficient
+        self.aSOR = torch.empty((ns, 1), device=self.device)
         GPObservable.count += 1
 
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
@@ -161,67 +165,53 @@ class GPObservable:
         self.Xtrain = Xtrain
         self.y = ytrain
 
-        self.Kxx = KernelFunction(Xtrain, Xtrain, kernel_types=self.kernel_types,
+        self.Xm = Xtrain[:, self.idx_SOR]
+
+        self.Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                   combination=self.combination)
-        # self.Kxx += 1e-6 * torch.eye(self.Kxx.shape[0], device=self.device)
-        # self.invKxx = torch.linalg.inv(
-        #    self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
-        # self.invKxx = torch.cholesky_inverse(torch.linalg.cholesky(
-        #    self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device)))
-
-        # # Check if the matrix is positive definite using eigenvalues
-        # eigenvalues = torch.linalg.eigvalsh(
-        #     self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
-        # if torch.all(eigenvalues > 0):
-        #     # Matrix is positive definite, proceed with Cholesky
-        #     L = torch.linalg.cholesky(
-        #         self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
-        #     self.invKxx = torch.cholesky_inverse(L)
-        # else:
-        #     # Matrix is not positive definite, fallback to SVD
-        #     U, S, V = torch.linalg.svd(
-        #         self.Kxx + ((self.noise)**2) * torch.eye(self.Kxx.shape[0], device=self.device))
-        #     S_inv = torch.diag(torch.where(
-        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-        #     self.invKxx = V.T @ S_inv @ U.T
+        self.Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+                                  hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                                  combination=self.combination)
 
         try:
             L = torch.linalg.cholesky(
-                self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
-            self.invKxx = torch.cholesky_inverse(L)
+                (self.Kmn @ self.Kmn.T) + ((self.noise)**2)*self.Kmm)
+            self.invKmm = torch.cholesky_inverse(L)
         except RuntimeError:
             U, S, V = torch.linalg.svd(
-                self.Kxx + ((self.noise)**2)*torch.eye(self.Kxx.shape[0], device=self.device))
+                (self.Kmn @ self.Kmn.T) + ((self.noise)**2)*self.Kmm)
             S_inv = torch.diag(torch.where(
                 S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            self.invKxx = V.T @ S_inv @ U.T
+            self.invKmm = V.T @ S_inv @ U.T
+
+        self.alpha = self.invKmm @ self.Kmn @ self.y
 
     def predictGP(self, Xq):
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              combination=self.combination)
-        Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             combination=self.combination)
-        mean = Kqx @ self.invKxx @ self.y
-        CovMat = Kqq - Kqx @ self.invKxx @ torch.t(Kqx)
+        # Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      combination=self.combination)
+        mean = Kqm @ self.alpha
+        CovMat = (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
         return mean, CovMat
 
     def predictMean(self, Xq):
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              combination=self.combination)
-        return Kqx @ self.invKxx @ self.y
+        return Kqm @ self.alpha
 
     def predictCov(self, Xq):
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              combination=self.combination)
-        Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             combination=self.combination)
-        return Kqq - Kqx @ self.invKxx @ torch.t(Kqx)
+        # Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      combination=self.combination)
+        return (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
 
     def optimize_hyperparameters(self, max_iter=100, lr=0.01):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
@@ -237,16 +227,22 @@ class GPObservable:
 
         for _ in range(max_iter):
             optimizer.zero_grad()
-            Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+
+            iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+                                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                                                   combination=self.combination))
+            Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
                                  hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                  combination=self.combination)
-            Kxx += (self.noise**2) * \
-                torch.eye(Kxx.shape[0], device=self.device)
 
-            invKxx = torch.linalg.inv(Kxx)
+            K_til = Kmn.T @ iKmm @ Kmn
+            K_til += (self.noise**2) * \
+                torch.eye(K_til.shape[0], device=self.device)
+
+            invK_til = torch.linalg.inv(K_til)
             y = self.y
-            log_det = torch.logdet(Kxx)
-            ll = -0.5 * (y.t() @ invKxx @ y + log_det +
+            log_det = torch.logdet(K_til)
+            ll = -0.5 * (y.t() @ invK_til @ y + log_det +
                          y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
 
             loss = -ll.squeeze()
@@ -265,11 +261,11 @@ class GPObservablesManager:
     def __init__(self):
         self.observables = {}
 
-    def add_observable(self, index, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, noise=2e-6, combination='sum'):
+    def add_observable(self, index, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, noise=2e-6, combination='sum', m=200):
         if index in self.observables:
             raise ValueError(f'Observable with index {index} already exists.')
         self.observables[index] = GPObservable(
-            d, ns, kernel_types, hp1_list, hp2_list, noise, combination)
+            d, ns, kernel_types, hp1_list, hp2_list, noise, combination, m=m)
 
     def set_random_hyperparameters(self, seed=42, scale=1.0):
         """
