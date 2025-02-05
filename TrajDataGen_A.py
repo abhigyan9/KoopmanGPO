@@ -16,7 +16,11 @@ num_trajectories = 100  # Number of random initial conditions
 
 def generate_initial_conditions(system, num_trajectories):
     if system == "Unforced Duffing":
-        return torch.tensor(np.random.uniform(-3., 3., size=(2, num_trajectories)), dtype=torch.float64)
+        x0 = torch.tensor(
+            np.random.uniform(1.5, 2.5, size=(1, num_trajectories)), dtype=torch.float64)
+        x1 = torch.tensor(
+            np.random.uniform(-1.5, 1.5, size=(1, num_trajectories)), dtype=torch.float64)
+        return torch.vstack([x0, x1])
     elif system == "van der Pol":
         return torch.tensor(np.random.uniform(-4., 4., size=(2, num_trajectories)), dtype=torch.float64)
     elif system == "Simple Pendulum":
@@ -45,11 +49,11 @@ def generate_random_inputs(num_steps, input_dim):
 # Main script
 def generate_and_save_data():
     systems = {
-        "Unforced Duffing": (gpk.f_UDO, 2, 0.01),
-        "van der Pol": (gpk.f_VDP, 2, 0.02),
-        "Simple Pendulum": (gpk.f_SDP, 2, 0.02),
-        "Lorenz": (gpk.f_Lorenz, 3, 0.01),
-        "Lotka Volterra": (gpk.f_LotkaVolterra, 2, 0.1)
+        "Unforced Duffing": (gpk.f_UDO, 2, 0.01)
+        # "van der Pol": (gpk.f_VDP, 2, 0.02),
+        # "Simple Pendulum": (gpk.f_SDP, 2, 0.02),
+        # "Lorenz": (gpk.f_Lorenz, 3, 0.01),
+        # "Lotka Volterra": (gpk.f_LotkaVolterra, 2, 0.1)
     }
 
     for system_name, (fx, state_dim, ts) in systems.items():
@@ -71,9 +75,9 @@ def generate_and_save_data():
             "num_trajectories": num_trajectories
         }
 
-        torch.save(data, f"Data/DataAuto_{system_name}.pt")
+        torch.save(data, f"Data/DataAuto_{system_name}_right.pt")
         print(f"Data for {
-              system_name} saved to Data/DataAuto_{system_name}.pt")
+              system_name} saved to Data/DataAuto_{system_name}_right.pt")
 
 
 if __name__ == "__main__":
