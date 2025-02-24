@@ -30,7 +30,7 @@ def generate_initial_conditions(system, num_trajectories):
             np.random.uniform(-3., 3., size=(1, num_trajectories)), dtype=torch.float64)
         return torch.vstack([x0, x1])
     elif system == "Lorenz":
-        return torch.tensor(np.random.uniform(10, 20, size=(3, num_trajectories)), dtype=torch.float64)
+        return torch.tensor(np.random.uniform(-15, 15, size=(3, num_trajectories)), dtype=torch.float64)
     elif system == "Lotka Volterra":
         x0 = torch.tensor(np.random.uniform(1., 2., size=(
             1, num_trajectories)), dtype=torch.float64)
@@ -49,10 +49,10 @@ def generate_random_inputs(num_steps, input_dim):
 # Main script
 def generate_and_save_data():
     systems = {
-        "Unforced Duffing": (gpk.f_UDO, 2, 0.01)
-        # "van der Pol": (gpk.f_VDP, 2, 0.02),
+        #"Unforced Duffing": (gpk.f_UDO, 2, 0.01)
+        # "van der Pol": (gpk.f_VDP, 2, 0.01)
         # "Simple Pendulum": (gpk.f_SDP, 2, 0.02),
-        # "Lorenz": (gpk.f_Lorenz, 3, 0.01),
+        "Lorenz": (gpk.f_Lorenz, 3, 0.01)
         # "Lotka Volterra": (gpk.f_LotkaVolterra, 2, 0.1)
     }
 
@@ -62,7 +62,7 @@ def generate_and_save_data():
 
         x0 = generate_initial_conditions(system_name, num_trajectories)
         for j in range(num_trajectories):
-            states = gpk.sim_RK4(fx, x0[:, j], ts, num_steps+1)
+            states = gpk.sim_RK4(fx, x0[:, j], ts, num_steps+1, params=torch.tensor([10., 8./3., 0.8]))
 
             trajectories.append(states)
             initial_conditions.append(x0)
@@ -75,9 +75,9 @@ def generate_and_save_data():
             "num_trajectories": num_trajectories
         }
 
-        torch.save(data, f"Data/DataAuto_{system_name}_right.pt")
+        torch.save(data, f"Data/DataAuto_{system_name}.pt")
         print(f"Data for {
-              system_name} saved to Data/DataAuto_{system_name}_right.pt")
+              system_name} saved to Data/DataAuto_{system_name}.pt")
 
 
 if __name__ == "__main__":

@@ -44,8 +44,8 @@ def generate_and_save_data():
 
         for _ in range(num_trajectories):
             x0 = generate_initial_conditions(system_name)
-            u = u_scaling * generate_random_inputs(num_steps, input_dim)
-            states = gpk.sim_RK4_nonautonomous(fx, x0, ts, num_steps, u)
+            u = u_scaling * generate_random_inputs(num_steps+1, input_dim)
+            states = gpk.sim_RK4_nonautonomous(fx, x0, ts, num_steps+1, u)
 
             trajectories.append(states)
             inputs.append(u)

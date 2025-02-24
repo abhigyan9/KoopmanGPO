@@ -7,7 +7,7 @@ import torch
 def fc_DO(x, u, params=None):
     # params.device = x.device
     if params is None:
-        params = torch.tensor([-0.2, 4., -1., 1.])
+        params = torch.tensor([-0.2, 4., -1., 1.], dtype=torch.float64)
 
     dx0 = x[1]
     dx1 = params[0] * x[1] + params[1] * x[0] + params[2] * x[0] ** 3 + u
@@ -18,7 +18,7 @@ def fc_DO(x, u, params=None):
 def fc_SDP(x, u, params=None):
     # Common param names = length, damping coefficient
     if params is None:
-        params = torch.tensor([1., 0.2])
+        params = torch.tensor([1., 0.2], dtype=torch.float64)
 
     g = 9.81
     dx0 = x[1]
@@ -29,7 +29,7 @@ def fc_SDP(x, u, params=None):
 # Inverted Pendulum on a cart with horizontal force on cart
 def fc_PoC(x, u, params=None):
     if params is None:
-        params = torch.tensor([0.4, 1., 9.81, 0.5, 6., 0.1/12])
+        params = torch.tensor([0.4, 1., 9.81, 0.5, 6., 0.1/12], dtype=torch.float64)
 
     m, M, g, l, b, I = params
     sigma = -(l * m * torch.cos(x[0])) ** 2 + \
@@ -41,6 +41,19 @@ def fc_PoC(x, u, params=None):
     dx3 = (u * (I + m * l ** 2) - I * b * x[3] - l * ((m * l) ** 2 + I * m) * torch.sin(
         x[0]) * (x[1] ** 2) - b * m * x[3] * (l ** 2) + 0.5 * g * torch.sin(2 * x[0]) * ((m * l) ** 2)) / sigma
     return torch.tensor([dx0, dx1, dx2, dx3], dtype=torch.float64, device=x.device)
+
+# Bilinear Model of DC motor from Daniel-Berhe and Unbehauen (1998)
+# This model was used for robust MPC demonstration in Lian and Jones 2020 - On Gaussian Process based Koopman Operators
+def fc_DCM_BL(x, u, params=None):
+    # Param symbols: L_a, R_a, k_m, J, B, tau_l, u_a
+    if params is None:
+        params = torch.tensor([0.314, 12.345, 0.253, 0.00441, 0.00732, 1.47, 60.], dtype=torch.float64)
+    
+    L_a, R_a, k_m, J, B, tau_l, u_a = params
+
+    dx0 = -(R_a/L_a) * x[0] + (k_m/L_a) * x[1] * u + (u_a/L_a)
+    dx1 = -(B/J) * x[1] + (k_m/J) * x[0] * u - (tau_l/J)
+    return torch.tensor([dx0, dx1], dtype=torch.float64, device=x.device)
 
 
 def sim_RK4_nonautonomous(fx, x0, ts, num_steps, u, params=None):

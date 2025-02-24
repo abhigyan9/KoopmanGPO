@@ -3,11 +3,14 @@ import torch
 import math
 from matplotlib import pyplot as plt
 import numpy as np
+import warnings
 
 # Define individual kernel functions
 
 
 def GaussianKernel(X1, X2, hp1, hp2):
+    #hp1, hp2 = 0.001*torch.log(1+torch.exp(1000.*hp1)), 0.001*torch.log(1+torch.exp(1000.*hp2))
+    hp1, hp2 = torch.clamp(hp1, min=1e-6), torch.clamp(hp2, min=1e-6)
     dists = torch.cdist(X1.T, X2.T, p=2)**2
     return hp1 * torch.exp(-dists / (2 * hp2**2))
 
@@ -144,20 +147,28 @@ class GPObservable:
         self.m = min(m, ns)
         # self.idx_SOR = torch.linspace(0, ns-1, m).int()
         self.idx_SOR = torch.linspace(0, ns-1, m).int()
-        self.Xm = torch.empty((m, m), device=self.device)
+        self.Xm = torch.empty((d, m), device=self.device)
         self.Knm = torch.empty((ns, m), device=self.device)
         self.y = torch.empty((ns, 1), device=self.device)  # Target values
         # SOR trained coefficient
         self.aSOR = torch.empty((ns, 1), device=self.device)
         GPObservable.count += 1
 
+    # def set_hyperparameters(self, hp1_list=None, hp2_list=None):
+    #     if hp1_list is not None:
+    #         self.hp1_list = [torch.tensor(
+    #             hp, requires_grad=True, device=self.device) for hp in hp1_list]
+    #     if hp2_list is not None:
+    #         self.hp2_list = [torch.tensor(
+    #             hp, requires_grad=True, device=self.device) for hp in hp2_list]
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
         if hp1_list is not None:
-            self.hp1_list = [torch.tensor(
-                hp, requires_grad=True, device=self.device) for hp in hp1_list]
+            for i, hp in enumerate(hp1_list):
+                self.hp1_list[i].data.copy_(torch.tensor(hp, device=self.device))
+
         if hp2_list is not None:
-            self.hp2_list = [torch.tensor(
-                hp, requires_grad=True, device=self.device) for hp in hp2_list]
+            for i, hp in enumerate(hp2_list):
+                self.hp2_list[i].data.copy_(torch.tensor(hp, device=self.device))
 
     def trainGP(self, Xtrain, ytrain):
         Xtrain = Xtrain.to(self.device)
@@ -170,6 +181,7 @@ class GPObservable:
         self.Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                   combination=self.combination)
+        self.Kmm += (1e-6) * torch.eye(self.m, device=self.device)
         self.Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                   combination=self.combination)
@@ -184,6 +196,7 @@ class GPObservable:
             S_inv = torch.diag(torch.where(
                 S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
             self.invKmm = V.T @ S_inv @ U.T
+            warnings.warn('Cholesky Decomposition failed! Fix Kernel parameters.')
 
         self.alpha = self.invKmm @ self.Kmn @ self.y
 
@@ -213,99 +226,44 @@ class GPObservable:
         #                      combination=self.combination)
         return (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
 
-    # def optimize_hyperparameters(self, max_iter=100, lr=0.01):
-    #     if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
-    #         raise ValueError(
-    #             "Training data not found. Please call trainGP before optimizing hyperparameters.")
-
-    #     self.hp1_list = [hp.detach().requires_grad_() for hp in self.hp1_list]
-    #     self.hp2_list = [hp.detach().requires_grad_() for hp in self.hp2_list]
-    #     self.noise = self.noise.detach().requires_grad_()
-
-    #     optimizer = torch.optim.Adam(
-    #         self.hp1_list + self.hp2_list + [self.noise], lr=lr)
-
-    #     for _ in range(max_iter):
-    #         optimizer.zero_grad()
-
-    #         jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
-    #         iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-    #                                                hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-    #                                                combination=self.combination) + jitter)
-    #         Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-    #                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-    #                              combination=self.combination)
-
-    #         K_til = Kmn.T @ iKmm @ Kmn
-    #         K_til += (self.noise**2) * \
-    #             torch.eye(K_til.shape[0], device=self.device)
-
-    #         invK_til = torch.linalg.inv(K_til)
-    #         y = self.y
-    #         log_det = torch.logdet(K_til)
-    #         ll = -0.5 * (y.t() @ invK_til @ y + log_det +
-    #                      y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
-
-    #         loss = -ll.squeeze()
-    #         loss.backward()
-    #         optimizer.step()
-
-    #     # Update with optimized hyperparameters
-    #     self.trainGP(self.Xtrain, self.y)
     def optimize_hyperparameters(self, max_iter=100, lr=0.01):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
                 "Training data not found. Please call trainGP before optimizing hyperparameters.")
 
-        # Store original references
-        orig_hp1_list = self.hp1_list
-        orig_hp2_list = self.hp2_list
-        orig_noise = self.noise
+        self.hp1_list = [hp.detach().requires_grad_() for hp in self.hp1_list]
+        self.hp2_list = [hp.detach().requires_grad_() for hp in self.hp2_list]
+        self.noise = self.noise.detach().requires_grad_()
 
-        # Create transformed versions for optimization
-        opt_hp1_list = [torch.nn.Parameter(torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
-        opt_hp2_list = [torch.nn.Parameter(torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
-        opt_noise = torch.nn.Parameter(torch.nn.functional.softplus(orig_noise.detach()))
-
-        optimizer = torch.optim.Adam([*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
+        optimizer = torch.optim.Adam(
+            self.hp1_list + self.hp2_list + [self.noise], lr=lr)
 
         for _ in range(max_iter):
             optimizer.zero_grad()
 
-            # Convert softplus-transformed params back
-            hp1_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp1_list]
-            hp2_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp2_list]
-            noise_opt = torch.nn.functional.softplus(opt_noise)
-
-            # Compute Kernel Inversion with jitter for stability
-            jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
             iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                                                hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                combination=self.combination) + jitter)
-
+                                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                                                   combination=self.combination))
             Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                                hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                combination=self.combination)
+                                 hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                                 combination=self.combination)
 
             K_til = Kmn.T @ iKmm @ Kmn
-            K_til += (noise_opt**2) * torch.eye(K_til.shape[0], device=self.device)
-            invK_til = torch.linalg.inv(K_til)
+            K_til += (self.noise**2) * \
+                torch.eye(K_til.shape[0], device=self.device)
 
+            invK_til = torch.linalg.inv(K_til)
+            y = self.y
             log_det = torch.logdet(K_til)
-            ll = -0.5 * (self.y.T @ invK_til @ self.y + log_det + self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
+            ll = -0.5 * (y.t() @ invK_til @ y + log_det +
+                         y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
 
             loss = -ll.squeeze()
             loss.backward()
             optimizer.step()
 
-        # Restore optimized hyperparameters to original storage
-        self.hp1_list = [hp.detach() for hp in hp1_opt]
-        self.hp2_list = [hp.detach() for hp in hp2_opt]
-        self.noise = noise_opt.detach()
-
-        # Retrain with updated parameters
+        # Update with optimized hyperparameters
         self.trainGP(self.Xtrain, self.y)
-
 
     @classmethod
     def count_Observables(cls):
@@ -322,6 +280,24 @@ class GPObservablesManager:
         self.observables[index] = GPObservable(
             d, ns, kernel_types, hp1_list, hp2_list, noise, combination, m=m)
 
+    # def set_random_hyperparameters(self, seed=42, scale=1.0):
+    #     """
+    #     Assigns random hyperparameters (hp1 and hp2) to all observables.
+
+    #     Args:
+    #         seed (int): Seed for reproducibility.
+    #         scale (float): Scaling factor for the generated hyperparameters.
+    #     """
+    #     torch.manual_seed(seed)  # Set random seed for reproducibility
+
+    #     for obs in self.observables.values():
+    #         num_kernels = len(obs.kernel_types)
+
+    #         # Assign random values to hp1 and hp2 lists
+    #         obs.hp1_list = [
+    #             scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
+    #         obs.hp2_list = [
+    #             scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
     def set_random_hyperparameters(self, seed=42, scale=1.0):
         """
         Assigns random hyperparameters (hp1 and hp2) to all observables.
@@ -335,11 +311,14 @@ class GPObservablesManager:
         for obs in self.observables.values():
             num_kernels = len(obs.kernel_types)
 
-            # Assign random values to hp1 and hp2 lists
+            # Ensure hp1_list and hp2_list contain leaf tensors
             obs.hp1_list = [
-                scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
+                (scale * torch.rand(1, device=obs.device)).detach().requires_grad_() for _ in range(num_kernels)
+            ]
             obs.hp2_list = [
-                scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
+                (scale * torch.rand(1, device=obs.device)).detach().requires_grad_() for _ in range(num_kernels)
+            ]
+
 
     def train_observable(self, index, Xtrain, ytrain):
         if index not in self.observables:
@@ -360,15 +339,77 @@ class GPObservablesManager:
         for obs in self.observables.values():
             obs.optimize_hyperparameters(max_iter, lr)
 
+    # def get_params(self, index):
+    #     if index not in self.observables:
+    #         raise ValueError(f'Observable with index {index} does not exist.')
+    #     return torch.hstack(self.observables[index].hp1_list + self.observables[index].hp2_list + [self.observables[index].noise])
+
+    # def get_all_params(self):
+    #     if not self.observables:
+    #         raise ValueError('No observables available in manager.')
+    #     return torch.vstack([self.get_params(idx) for idx in self.observables])
+
     def get_params(self, index):
         if index not in self.observables:
             raise ValueError(f'Observable with index {index} does not exist.')
-        return torch.tensor(self.observables[index].hp1_list + self.observables[index].hp2_list)
+        
+        # Return a list of separate tensors to preserve their leaf status
+        obs = self.observables[index]
+        return obs.hp1_list + obs.hp2_list# + [obs.noise]  
 
     def get_all_params(self):
         if not self.observables:
             raise ValueError('No observables available in manager.')
-        return torch.vstack([self.get_params(idx) for idx in self.observables])
+
+        params = []
+        for idx in self.observables:
+            params.extend(self.get_params(idx))  # Collect all parameters as a list
+        
+        return params  # Return a list of tensors, not a single tensor
+
+    # def get_all_params(self):
+    #     if not self.observables:
+    #         raise ValueError('No observables available in manager.')
+
+    #     params = []
+    #     for idx, obs in self.observables.items():
+    #         params.extend(obs.hp1_list + obs.hp2_list + [obs.noise])  # Keep them as separate leaf tensors
+        
+    #     return params  # Return a list of parameters instead of a single tensor
+
+    
+    def set_params(self, param_tensor):
+        """
+        Updates the hp1_list, hp2_list, and noise parameters for all GPObservables
+        in the manager using the given param_tensor, without breaking autograd.
+
+        Args:
+            param_tensor (torch.Tensor): A 2D tensor where each row contains 
+                                        the concatenated parameters of an observable.
+        """
+        if not self.observables:
+            raise ValueError("No observables available in manager.")
+        
+        if param_tensor.shape[0] != len(self.observables):
+            raise ValueError(f"Expected {len(self.observables)} rows in param_tensor, got {param_tensor.shape[0]}")
+
+        for i, (idx, obs) in enumerate(self.observables.items()):
+            num_kernels = len(obs.kernel_types)
+            param_row = param_tensor[i]  # Extract the row corresponding to this observable
+
+            # Assign new values to hp1_list
+            hp1_values = param_row[:num_kernels]
+            for j, hp in enumerate(obs.hp1_list):
+                hp.data.copy_(hp1_values[j])  # In-place update
+
+            # Assign new values to hp2_list
+            hp2_values = param_row[num_kernels:2*num_kernels]
+            for j, hp in enumerate(obs.hp2_list):
+                hp.data.copy_(hp2_values[j])  # In-place update
+
+            # Assign new value to noise
+            obs.noise.data.copy_(param_row[2*num_kernels])  # In-place update for noise
+
 
     def visualize2D(self, resolution=50, range_x=(-1, 1), range_y=(-1, 1)):
         """
@@ -468,8 +509,7 @@ def getKoopman_control(manager, indices, X, Xplus, U, nT, stateAug=False):
     Args:
         manager (GPObservablesManager): Manager holding all GPObservable objects.
         indices (list): List of indices for observables to include.
-        X (torch.Tensor): n x N matrix of state trajectory.
-        Xplus (torch.Tensor): n x N matrix of time-shifted state trajectories
+        Xall (torch.Tensor): n x (N+1) matrix of state trajectory.
         nT (float): number of trajectories in training dataset
 
     Returns:
@@ -494,14 +534,14 @@ def getKoopman_control(manager, indices, X, Xplus, U, nT, stateAug=False):
             manager.predict_mean(i, Xplus), dim0=0, dim1=-1)
 
     if stateAug:
-        Mfull = torch.vstack((X, M, U))
+        M = torch.vstack((X, M, U))
         Mplus = torch.vstack((Xplus, Mplus))
     else:
-        Mfull = torch.vstack((M, U))
+        M = torch.vstack((M, U))
 
     # Compute C(z) and A(z)
-    Mf_pinv = torch.linalg.pinv(Mfull)
-    K = Mplus @ Mf_pinv
+    M_pinv = torch.linalg.pinv(M)
+    K = Mplus @ M_pinv
     if stateAug:
         A = K[:, 0:(n+p)]
         B = K[:, (n+p):]
@@ -514,7 +554,7 @@ def getKoopman_control(manager, indices, X, Xplus, U, nT, stateAug=False):
         for i in range(n):
             C[i, i] = 1.
     else:
-        C = X @ torch.linalg.pinv(M)
+        C = X @ M_pinv
 
     return A, B, C
 
