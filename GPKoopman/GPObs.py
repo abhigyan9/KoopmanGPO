@@ -213,45 +213,6 @@ class GPObservable:
         #                      combination=self.combination)
         return (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
 
-    # def optimize_hyperparameters(self, max_iter=100, lr=0.01):
-    #     if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
-    #         raise ValueError(
-    #             "Training data not found. Please call trainGP before optimizing hyperparameters.")
-
-    #     self.hp1_list = [hp.detach().requires_grad_() for hp in self.hp1_list]
-    #     self.hp2_list = [hp.detach().requires_grad_() for hp in self.hp2_list]
-    #     self.noise = self.noise.detach().requires_grad_()
-
-    #     optimizer = torch.optim.Adam(
-    #         self.hp1_list + self.hp2_list + [self.noise], lr=lr)
-
-    #     for _ in range(max_iter):
-    #         optimizer.zero_grad()
-
-    #         jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
-    #         iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-    #                                                hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-    #                                                combination=self.combination) + jitter)
-    #         Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-    #                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-    #                              combination=self.combination)
-
-    #         K_til = Kmn.T @ iKmm @ Kmn
-    #         K_til += (self.noise**2) * \
-    #             torch.eye(K_til.shape[0], device=self.device)
-
-    #         invK_til = torch.linalg.inv(K_til)
-    #         y = self.y
-    #         log_det = torch.logdet(K_til)
-    #         ll = -0.5 * (y.t() @ invK_til @ y + log_det +
-    #                      y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
-
-    #         loss = -ll.squeeze()
-    #         loss.backward()
-    #         optimizer.step()
-
-    #     # Update with optimized hyperparameters
-    #     self.trainGP(self.Xtrain, self.y)
     def optimize_hyperparameters(self, max_iter=100, lr=0.01):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
@@ -263,11 +224,15 @@ class GPObservable:
         orig_noise = self.noise
 
         # Create transformed versions for optimization
-        opt_hp1_list = [torch.nn.Parameter(torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
-        opt_hp2_list = [torch.nn.Parameter(torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
-        opt_noise = torch.nn.Parameter(torch.nn.functional.softplus(orig_noise.detach()))
+        opt_hp1_list = [torch.nn.Parameter(
+            torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
+        opt_hp2_list = [torch.nn.Parameter(
+            torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
+        opt_noise = torch.nn.Parameter(
+            torch.nn.functional.softplus(orig_noise.detach()))
 
-        optimizer = torch.optim.Adam([*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
+        optimizer = torch.optim.Adam(
+            [*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
 
         for _ in range(max_iter):
             optimizer.zero_grad()
@@ -280,19 +245,21 @@ class GPObservable:
             # Compute Kernel Inversion with jitter for stability
             jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
             iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                                                hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                combination=self.combination) + jitter)
+                                                   hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                                   combination=self.combination) + jitter)
 
             Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                                hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                combination=self.combination)
+                                 hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                 combination=self.combination)
 
             K_til = Kmn.T @ iKmm @ Kmn
-            K_til += (noise_opt**2) * torch.eye(K_til.shape[0], device=self.device)
+            K_til += (noise_opt**2) * \
+                torch.eye(K_til.shape[0], device=self.device)
             invK_til = torch.linalg.inv(K_til)
 
             log_det = torch.logdet(K_til)
-            ll = -0.5 * (self.y.T @ invK_til @ self.y + log_det + self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
+            ll = -0.5 * (self.y.T @ invK_til @ self.y + log_det +
+                         self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
 
             loss = -ll.squeeze()
             loss.backward()
@@ -305,7 +272,6 @@ class GPObservable:
 
         # Retrain with updated parameters
         self.trainGP(self.Xtrain, self.y)
-
 
     @classmethod
     def count_Observables(cls):
