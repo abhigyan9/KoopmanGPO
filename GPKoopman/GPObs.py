@@ -147,8 +147,6 @@ class GPObservable:
         self.Xm = torch.empty((m, m), device=self.device)
         self.Knm = torch.empty((ns, m), device=self.device)
         self.y = torch.empty((ns, 1), device=self.device)  # Target values
-        # SOR trained coefficient
-        self.aSOR = torch.empty((ns, 1), device=self.device)
         GPObservable.count += 1
 
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
