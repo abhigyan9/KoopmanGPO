@@ -13,5 +13,6 @@ from .non_autonomous import sim_LTI_nonautonomous, sim_RK4_nonautonomous, fc_DO,
 # import dictionary, functions and classes from GPObs.py
 from .GPObs import KERNEL_FUNCTIONS
 from .GPObs import GaussianKernel, ExpSineSqrKernel, ThinSplineKernel, InverseQuadraticKernel, CosineKernel
+from .GPObs import GibbsExpAttractorKernel, ExplicitAttractorKernel
 from .GPObs import KernelFunction, getKoopman, getKoopman_control
 from .GPObs import GPObservable, GPObservablesManager
