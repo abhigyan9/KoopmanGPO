@@ -1,5 +1,6 @@
 
 import torch
+import torch.nn as nn
 import math
 from matplotlib import pyplot as plt
 import numpy as np
@@ -7,33 +8,100 @@ import numpy as np
 # Define individual kernel functions
 
 
-def GaussianKernel(X1, X2, hp1, hp2):
+def GaussianKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)**2
     return hp1 * torch.exp(-dists / (2 * hp2**2))
 
 
-def ThinSplineKernel(X1, X2, hp1, hp2):
+def ThinSplineKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)
     epsilon = 1e-8
     return hp1 * ((dists/hp2)**2) * torch.log((dists / hp2) + epsilon)
 
 
-def InverseQuadraticKernel(X1, X2, hp1, hp2):
+def InverseQuadraticKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)**2
     return hp1 * (1 / (1 + (dists / (hp2**2))))
 
 
-def CosineKernel(X1, X2, hp1, hp2):
+def CosineKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)
     return hp1 * torch.cos(math.pi * dists / hp2) ** 2
 
 
-def ExpSineSqrKernel(X1, X2, hp1, hp2):
+def ExpSineSqrKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)
     hp2 = torch.clamp(hp2, min=1e-2)
     epsilon = 1e-4
     return hp1 * torch.exp(epsilon - 0.5 * ((torch.sin(math.pi * dists / hp1)) ** 2) / hp2)
     # return torch.exp((-2 * (torch.sin(math.pi * dists / hp1))**2) / hp2**2)
+
+
+def GibbsExpAttractorKernel(X1, X2, hp1, hp2, mu):
+    """
+    Gibbs kernel with an attractor-dependent exponential decay length scale.
+    The length scale decreases with distance from the attractor.
+
+    Args:
+        X1 (Tensor): First set of points (d, n1).
+        X2 (Tensor): Second set of points (d, n2).
+        hp1 (Tensor): Scaling factor for the length scale.
+        hp2 (Tensor): Baseline length scale.
+        mu (Tensor): Location of the attractor (d, 1).
+
+    Returns:
+        Tensor: Kernel matrix of shape (n1, n2).
+    """
+    # Shift inputs by the attractor location
+    # X1_shifted = X1 - mu.unsqueeze(1)  # (d, n1)
+    # X2_shifted = X2 - mu.unsqueeze(1)  # (d, n2)
+    X1_shifted = X1 - mu
+    X2_shifted = X2 - mu
+
+    # Compute squared norm relative to attractor
+    X1_norm2 = torch.sum(X1_shifted**2, dim=0)  # (n1,)
+    X2_norm2 = torch.sum(X2_shifted**2, dim=0)  # (n2,)
+
+    # Compute input-dependent length scales
+    l_X1 = hp1 + hp2 * torch.exp(-X1_norm2)  # (n1,)
+    l_X2 = hp1 + hp2 * torch.exp(-X2_norm2)  # (n2,)
+
+    # Compute Gibbs kernel denominator
+    L_sum = (l_X1**2).unsqueeze(1) + (l_X2**2).unsqueeze(0)  # (n1, n2)
+    outer_l = l_X1.unsqueeze(1) * l_X2.unsqueeze(0)  # (n1, n2)
+    factor = torch.sqrt(2.0 * outer_l / L_sum)
+
+    # Compute squared Euclidean distances
+    dists = torch.cdist(X1.T, X2.T, p=2)**2  # (n1, n2)
+
+    # Compute kernel matrix
+    return factor * torch.exp(-dists / L_sum)
+
+
+def ExplicitAttractorKernel(X1, X2, hp1, hp2, mu):
+    """
+    Computes the Explicit Kernel K_Explicit(x, x') for attractor-based covariance.
+
+    Args:
+        X1 (Tensor): First set of points (d, n1).
+        X2 (Tensor): Second set of points (d, n2).
+        hp1 (Tensor): Scaling factor (theta_1).
+        hp2 (Tensor): Length scale (theta_2).
+        mu (Tensor): Location of the attractor (d, 1).
+
+    Returns:
+        Tensor: Kernel matrix (n1, n2).
+    """
+    # Compute squared distances from the attractor for X1 and X2
+    X1_shifted_norm2 = torch.sum((X1 - mu) ** 2, dim=0)  # (n1,)
+    X2_shifted_norm2 = torch.sum((X2 - mu) ** 2, dim=0)  # (n2,)
+
+    # Compute the exponent term
+    exponent = -(X1_shifted_norm2.unsqueeze(1) +
+                 X2_shifted_norm2.unsqueeze(0)) / (2 * hp2**2)
+
+    # Compute the kernel matrix
+    return hp1 * torch.exp(exponent)
 
 
 # Dictionary mapping kernel names to functions
@@ -42,64 +110,50 @@ KERNEL_FUNCTIONS = {
     'ThinSpline': ThinSplineKernel,
     'InverseQuadratic': InverseQuadraticKernel,
     'ExpSineSqr': ExpSineSqrKernel,
-    'Cosine': CosineKernel
+    'Cosine': CosineKernel,
+    'GibbsExpAttractor': GibbsExpAttractorKernel,
+    'ExplicitAttractor': ExplicitAttractorKernel
 }
 
 
-def KernelFunction(X1, X2=None, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, combination='sum'):
+def KernelFunction(X1, X2=None, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, mu_list=None, combination='sum'):
     """
-    Computes a kernel matrix using a combination of multiple kernels.
+    Computes a kernel matrix using multiple kernels, supporting attractor-based kernels.
 
     Args:
         X1 (Tensor): First set of points.
         X2 (Tensor, optional): Second set of points. Defaults to None.
         kernel_types (list): List of kernel function names.
-        hp1_list (list, optional): List of first hyperparameters corresponding to each kernel. Defaults to None.
-        hp2_list (list, optional): List of second hyperparameters corresponding to each kernel. Defaults to None.
-        combination (str): How to combine kernels ('sum' or 'product'). Defaults to 'sum'.
+        hp1_list (list, optional): List of first hyperparameters for each kernel.
+        hp2_list (list, optional): List of second hyperparameters for each kernel.
+        mu_list (list, optional): List of attractor locations for each kernel.
+        combination (str): How to combine kernels ('sum' or 'product').
 
     Returns:
         Tensor: Kernel matrix.
     """
-    if not torch.is_tensor(X1):
-        raise TypeError(f"Expected X1 to be a torch.Tensor, but got {
-                        type(X1).__name__}.")
+    if X2 is None:
+        X2 = X1
 
-    n1 = X1.shape[0]
-    if X2 is not None:
-        if not torch.is_tensor(X2):
-            raise TypeError(f"Expected X2 to be a torch.Tensor, but got {
-                            type(X2).__name__}.")
-        n2 = X2.shape[0]
-        if n1 != n2:
-            raise ValueError(
-                f'Mismatch in input dimensions. Tensor 1 and 2 have different rows: {n1}, {n2}.')
-    else:
-        X2 = torch.zeros(n1, 1)
-
-    l1, l2 = X1.shape[1], X2.shape[1]
-
-    cuda0 = torch.device('cuda:0')
-    X1, X2 = X1.to(cuda0), X2.to(cuda0)
-
-    # Ensure hyperparameters are lists and match the number of kernels
     if hp1_list is None:
-        hp1_list = [torch.tensor(1.0, device=cuda0)] * len(kernel_types)
+        hp1_list = [torch.tensor(1.0, device=X1.device)] * len(kernel_types)
     if hp2_list is None:
-        hp2_list = [torch.tensor(1.0, device=cuda0)] * len(kernel_types)
+        hp2_list = [torch.tensor(1.0, device=X1.device)] * len(kernel_types)
+    if mu_list is None:
+        mu_list = [None] * len(kernel_types)
 
-    if len(hp1_list) != len(kernel_types) or len(hp2_list) != len(kernel_types):
+    if len(hp1_list) != len(kernel_types) or len(hp2_list) != len(kernel_types) or len(mu_list) != len(kernel_types):
         raise ValueError(
-            "Number of hyperparameters must match the number of kernel types.")
+            "Number of hyperparameters and attractor locations must match the number of kernel types.")
 
-    # Compute combined kernel
+    # Compute the kernel matrix
     if combination == 'sum':
-        K = sum(KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2)
-                for kernel, hp1, hp2 in zip(kernel_types, hp1_list, hp2_list))
+        K = sum(KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2, mu)
+                for kernel, hp1, hp2, mu in zip(kernel_types, hp1_list, hp2_list, mu_list))
     elif combination == 'product':
-        K = torch.ones((l1, l2), device=cuda0)  # Initialize product kernel
-        for kernel, hp1, hp2 in zip(kernel_types, hp1_list, hp2_list):
-            K *= KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2)
+        K = torch.ones((X1.shape[1], X2.shape[1]), device=X1.device)
+        for kernel, hp1, hp2, mu in zip(kernel_types, hp1_list, hp2_list, mu_list):
+            K *= KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2, mu)
     else:
         raise ValueError(
             "Invalid combination method. Choose 'sum' or 'product'.")
@@ -111,7 +165,7 @@ class GPObservable:
     count = 0
 
     def __init__(self, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
-                 noise=2e-8, combination='sum', device='cuda:0', m=200):
+                 mu_list=None, noise=2e-8, combination='sum', device='cuda:0', m=200):
         """
         Gaussian Process Observable with customizable kernel functions.
 
@@ -121,41 +175,95 @@ class GPObservable:
             kernel_types (list): List of kernel names.
             hp1_list (list): List of first hyperparameters for each kernel.
             hp2_list (list): List of second hyperparameters for each kernel.
+            mu_list (list): List of attractor locations for each kernel.
             noise (float): Observation noise.
             combination (str): Kernel combination method ('sum' or 'product').
             device (str): Compute device ('cuda:0' or 'cpu').
+            m (int): Number of inducing points (or similar parameter).
         """
         self.device = torch.device(device)
-        self.kernel_types = kernel_types  # List of kernel functions
-        self.combination = combination  # How kernels are combined
+        self.kernel_types = kernel_types  # List of kernel names
+        self.combination = combination    # How kernels are combined
 
-        # Ensure hyperparameter lists are set correctly
-        self.hp1_list = hp1_list if hp1_list is not None else [torch.tensor(
-            1.0, requires_grad=True, device=self.device) for _ in kernel_types]
-        self.hp2_list = hp2_list if hp2_list is not None else [torch.tensor(
-            1.0, requires_grad=True, device=self.device) for _ in kernel_types]
+        # Create nn.ParameterLists for hyperparameters and mu
+        if hp1_list is not None:
+            self.hp1_list = nn.ParameterList(
+                [param if isinstance(param, nn.Parameter)
+                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
+                                   else torch.tensor(param, device=self.device))
+                 for param in hp1_list]
+            )
+        else:
+            self.hp1_list = nn.ParameterList([
+                nn.Parameter(torch.tensor(1.0, device=self.device))
+                for _ in kernel_types
+            ])
+
+        if hp2_list is not None:
+            self.hp2_list = nn.ParameterList(
+                [param if isinstance(param, nn.Parameter)
+                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
+                                   else torch.tensor(param, device=self.device))
+                 for param in hp2_list]
+            )
+        else:
+            self.hp2_list = nn.ParameterList([
+                nn.Parameter(torch.tensor(1.0, device=self.device))
+                for _ in kernel_types
+            ])
+
+        if mu_list is not None:
+            self.mu_list = nn.ParameterList(
+                [param if isinstance(param, nn.Parameter)
+                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
+                                   else torch.tensor(param, device=self.device))
+                 for param in mu_list]
+            )
+        else:
+            self.mu_list = nn.ParameterList([
+                nn.Parameter(torch.zeros((d, 1), device=self.device))
+                for _ in kernel_types
+            ])
 
         if len(self.hp1_list) != len(kernel_types) or len(self.hp2_list) != len(kernel_types):
             raise ValueError(
                 "Number of hyperparameters must match the number of kernel types.")
 
-        self.noise = torch.tensor(
-            noise, requires_grad=True, device=self.device)
+        self.noise = nn.Parameter(torch.tensor(noise, device=self.device))
+
         self.m = min(m, ns)
-        # self.idx_SOR = torch.linspace(0, ns-1, m).int()
-        self.idx_SOR = torch.linspace(0, ns-1, m).int()
-        self.Xm = torch.empty((m, m), device=self.device)
-        self.Knm = torch.empty((ns, m), device=self.device)
+        self.idx_SOR = torch.linspace(0, ns-1, self.m).int()
+        self.Xm = torch.empty((self.m, self.m), device=self.device)
+        self.Knm = torch.empty((ns, self.m), device=self.device)
         self.y = torch.empty((ns, 1), device=self.device)  # Target values
+        # SOR trained coefficient
+        self.aSOR = torch.empty((ns, 1), device=self.device)
         GPObservable.count += 1
 
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
         if hp1_list is not None:
-            self.hp1_list = [torch.tensor(
-                hp, requires_grad=True, device=self.device) for hp in hp1_list]
+            self.hp1_list = nn.ParameterList([
+                nn.Parameter(torch.tensor(hp, device=self.device))
+                for hp in hp1_list
+            ])
         if hp2_list is not None:
-            self.hp2_list = [torch.tensor(
-                hp, requires_grad=True, device=self.device) for hp in hp2_list]
+            self.hp2_list = nn.ParameterList([
+                nn.Parameter(torch.tensor(hp, device=self.device))
+                for hp in hp2_list
+            ])
+
+    def get_parameters(self):
+        """
+        Returns a dictionary containing the current hyperparameters (hp1_list, hp2_list), noise,
+        and attractor locations (mu_list) for this GPObservable.
+        """
+        params = {
+            "hp1_list": [hp.detach() for hp in self.hp1_list],
+            "hp2_list": [hp.detach() for hp in self.hp2_list],
+            "noise": self.noise.detach(),
+            "mu_list": [mu.detach() for mu in self.mu_list]
+        }
+        return params
 
     def trainGP(self, Xtrain, ytrain):
         Xtrain = Xtrain.to(self.device)
@@ -167,18 +275,18 @@ class GPObservable:
 
         self.Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                                  combination=self.combination)
+                                  mu_list=self.mu_list, combination=self.combination)
         self.Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                                  combination=self.combination)
+                                  mu_list=self.mu_list, combination=self.combination)
 
         try:
             L = torch.linalg.cholesky(
-                (self.Kmn @ self.Kmn.T) + ((self.noise)**2)*self.Kmm)
+                (self.Kmn @ self.Kmn.T) + (self.noise ** 2) * self.Kmm)
             self.invKmm = torch.cholesky_inverse(L)
         except RuntimeError:
             U, S, V = torch.linalg.svd(
-                (self.Kmn @ self.Kmn.T) + ((self.noise)**2)*self.Kmm)
+                (self.Kmn @ self.Kmn.T) + (self.noise ** 2) * self.Kmm)
             S_inv = torch.diag(torch.where(
                 S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
             self.invKmm = V.T @ S_inv @ U.T
@@ -188,66 +296,108 @@ class GPObservable:
     def predictGP(self, Xq):
         Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             combination=self.combination)
-        # Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
-        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-        #                      combination=self.combination)
+                             mu_list=self.mu_list, combination=self.combination)
         mean = Kqm @ self.alpha
-        CovMat = (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
+        CovMat = (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
         return mean, CovMat
 
     def predictMean(self, Xq):
         Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             combination=self.combination)
+                             mu_list=self.mu_list, combination=self.combination)
         return Kqm @ self.alpha
 
     def predictCov(self, Xq):
         Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             combination=self.combination)
-        # Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
-        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-        #                      combination=self.combination)
-        return (Kqm @ self.invKmm @ torch.t(Kqm)) * (self.noise ** 2)
+                             mu_list=self.mu_list, combination=self.combination)
+        return (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
+
+    def forward(self, Xq):
+        """
+        Fully differentiable forward pass that computes predictions using the current hyperparameters.
+        """
+        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
+        L = torch.linalg.cholesky(
+            (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm + jitter)
+        invKmm = torch.cholesky_inverse(L)
+        alpha = invKmm @ Kmn @ self.y
+        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        mean = Kqm @ alpha
+        cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
+        return mean, cov
 
     def optimize_hyperparameters(self, max_iter=100, lr=0.01):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
                 "Training data not found. Please call trainGP before optimizing hyperparameters.")
 
-        # Store original references
+        # Store original references for hyperparameters and mu
         orig_hp1_list = self.hp1_list
         orig_hp2_list = self.hp2_list
         orig_noise = self.noise
+        orig_mu_list = self.mu_list
 
-        # Create transformed versions for optimization
+        # Create transformed versions for optimization:
+        # Use softplus for hp1, hp2, and noise to ensure positivity.
+        # (For mu, we allow negative values, so we don't use softplus.)
         opt_hp1_list = [torch.nn.Parameter(
             torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
         opt_hp2_list = [torch.nn.Parameter(
             torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
         opt_noise = torch.nn.Parameter(
             torch.nn.functional.softplus(orig_noise.detach()))
+        opt_mu_list = [torch.nn.Parameter(mu.detach()) for mu in orig_mu_list]
 
+        # Include all parameters in the optimizer
         optimizer = torch.optim.Adam(
-            [*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
+            [*opt_hp1_list, *opt_hp2_list, opt_noise, *opt_mu_list], lr=lr)
 
         for _ in range(max_iter):
             optimizer.zero_grad()
 
-            # Convert softplus-transformed params back
+            # Convert softplus-transformed parameters back:
             hp1_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp1_list]
             hp2_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp2_list]
             noise_opt = torch.nn.functional.softplus(opt_noise)
+            mu_opt = opt_mu_list  # no transformation for mu
 
-            # Compute Kernel Inversion with jitter for stability
+            # Compute the kernel matrices using the optimized hyperparameters and mu values.
             jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
-            iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                                                   hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                   combination=self.combination) + jitter)
+            try:
+                iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm,
+                                                       kernel_types=self.kernel_types,
+                                                       hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                                       mu_list=mu_opt,
+                                                       combination=self.combination) + jitter)
+            except RuntimeError:
+                try:
+                    iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
+                                                            kernel_types=self.kernel_types,
+                                                            hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                                            mu_list=mu_opt,
+                                                            combination=self.combination) + jitter)
+                except RuntimeError:
+                    jitter = 1e-5 * \
+                        torch.eye(self.Xm.shape[1], device=self.device)
+                    iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
+                                                            kernel_types=self.kernel_types,
+                                                            hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                                            mu_list=mu_opt,
+                                                            combination=self.combination) + jitter)
 
-            Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+            Kmn = KernelFunction(self.Xm, self.Xtrain,
+                                 kernel_types=self.kernel_types,
                                  hp1_list=hp1_opt, hp2_list=hp2_opt,
+                                 mu_list=mu_opt,
                                  combination=self.combination)
 
             K_til = Kmn.T @ iKmm @ Kmn
@@ -258,33 +408,79 @@ class GPObservable:
             log_det = torch.logdet(K_til)
             ll = -0.5 * (self.y.T @ invK_til @ self.y + log_det +
                          self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
-
             loss = -ll.squeeze()
             loss.backward()
             optimizer.step()
 
-        # Restore optimized hyperparameters to original storage
-        self.hp1_list = [hp.detach() for hp in hp1_opt]
-        self.hp2_list = [hp.detach() for hp in hp2_opt]
-        self.noise = noise_opt.detach()
+        # Restore optimized parameters back to the observable as nn.ParameterList objects.
+        self.hp1_list = nn.ParameterList(
+            [nn.Parameter(hp.detach()) for hp in opt_hp1_list])
+        self.hp2_list = nn.ParameterList(
+            [nn.Parameter(hp.detach()) for hp in opt_hp2_list])
+        self.mu_list = nn.ParameterList(
+            [nn.Parameter(mu.detach()) for mu in opt_mu_list])
+        self.noise = nn.Parameter(noise_opt.detach())
 
-        # Retrain with updated parameters
+        # Retrain GP with the updated parameters.
         self.trainGP(self.Xtrain, self.y)
-
-    @classmethod
-    def count_Observables(cls):
-        return cls.count
 
 
 class GPObservablesManager:
     def __init__(self):
         self.observables = {}
 
-    def add_observable(self, index, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, noise=2e-6, combination='sum', m=200):
+    def add_observable(self, index, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, mu_list=None, noise=2e-6, combination='sum', device='cuda:0', m=200):
         if index in self.observables:
             raise ValueError(f'Observable with index {index} already exists.')
         self.observables[index] = GPObservable(
-            d, ns, kernel_types, hp1_list, hp2_list, noise, combination, m=m)
+            d, ns, kernel_types, hp1_list, hp2_list, mu_list, noise, combination, device, m)
+
+    def get_params(self, index):
+        """
+        Returns a dictionary of the current parameters for the observable with the given index.
+        """
+        if index not in self.observables:
+            raise ValueError(f'Observable with index {index} does not exist.')
+        return self.observables[index].get_parameters()
+
+    def get_all_params(self):
+        """
+        Returns a dictionary mapping each observable index to its parameters dictionary.
+        """
+        if not self.observables:
+            raise ValueError('No observables available in manager.')
+        return {idx: obs.get_parameters() for idx, obs in self.observables.items()}
+
+    def parameters(self):
+        """
+        Returns a list of all optimizable parameters (hp1, hp2, mu, noise) from all GPObservable instances.
+        """
+        params = []
+        for obs in self.observables.values():
+            params.extend(obs.hp1_list)
+            params.extend(obs.hp2_list)
+            params.extend(obs.mu_list)
+            params.append(obs.noise)
+        return params
+
+    def set_parameters(self, hp1_list=None, hp2_list=None, noise_list=None, mu_list=None):
+        i = 0
+        for obs in self.observables.values():
+            num_kernels = len(obs.kernel_types)
+
+            if hp1_list is not None:
+                for k in range(num_kernels):
+                    obs.hp1_list[k].data = hp1_list[i + k].data
+            if hp2_list is not None:
+                for k in range(num_kernels):
+                    obs.hp2_list[k].data = hp2_list[i + k].data
+            if noise_list is not None:
+                obs.noise.data = noise_list[i].data
+            if mu_list is not None:
+                for k in range(num_kernels):
+                    obs.mu_list[k].data = mu_list[i + k].data
+
+            i += num_kernels
 
     def set_random_hyperparameters(self, seed=42, scale=1.0):
         """
@@ -323,16 +519,6 @@ class GPObservablesManager:
     def optimize_hyperparameters(self, max_iter=100, lr=0.01):
         for obs in self.observables.values():
             obs.optimize_hyperparameters(max_iter, lr)
-
-    def get_params(self, index):
-        if index not in self.observables:
-            raise ValueError(f'Observable with index {index} does not exist.')
-        return torch.tensor(self.observables[index].hp1_list + self.observables[index].hp2_list)
-
-    def get_all_params(self):
-        if not self.observables:
-            raise ValueError('No observables available in manager.')
-        return torch.vstack([self.get_params(idx) for idx in self.observables])
 
     def visualize2D(self, resolution=50, range_x=(-1, 1), range_y=(-1, 1)):
         """
