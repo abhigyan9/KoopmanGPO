@@ -55,10 +55,12 @@ def f_LotkaVolterra(x, params=None):
 def f_PWL1(x, params=None):
     if params is None:
         params = torch.tensor([0.31, 0.94, -3., 0.32])
+        # params = a, b, c, x*
+    # assumed that sample-time if 1.
     if x[0] < 0.:
         dx0 = params[2] * x[0] - params[2] * params[3] - x[0]
     else:
-        dx0 = params[1] * x[0] + params[0] - params[1] * x[0] - x[0]
+        dx0 = params[1] * x[0] + params[0] - params[1] * params[3] - x[0]
 
     return torch.tensor([dx0], dtype=torch.float64)
 
