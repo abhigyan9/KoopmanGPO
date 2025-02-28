@@ -584,38 +584,60 @@ class GPObservablesManager:
             i += num_kernels
 
     # def set_random_hyperparameters(self, seed=42, scale=1.0):
-    #     """
-    #     Assigns random hyperparameters (hp1 and hp2) to all observables.
-
-    #     Args:
-    #         seed (int): Seed for reproducibility.
-    #         scale (float): Scaling factor for the generated hyperparameters.
-    #     """
-    #     torch.manual_seed(seed)  # Set random seed for reproducibility
-
+    #     torch.manual_seed(seed)  # For reproducibility
     #     for obs in self.observables.values():
     #         num_kernels = len(obs.kernel_types)
-
-    #         # Assign random values to hp1 and hp2 lists
-    #         obs.hp1_list = [
-    #             scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
-    #         obs.hp2_list = [
-    #             scale * torch.rand(1, device=obs.device, requires_grad=True) for _ in range(num_kernels)]
+    #         obs.hp1_list = nn.ParameterList([
+    #             nn.Parameter(
+    #                 scale * torch.rand(1, device=obs.device, requires_grad=True))
+    #             for _ in range(num_kernels)
+    #         ])
+    #         obs.hp2_list = nn.ParameterList([
+    #             nn.Parameter(
+    #                 scale * torch.rand(1, device=obs.device, requires_grad=True))
+    #             for _ in range(num_kernels)
+    #         ])
 
     def set_random_hyperparameters(self, seed=42, scale=1.0):
+        """
+        Assigns random hyperparameters (hp1, hp2, and optionally mu_list) to all observables.
+
+        Args:
+            seed (int): Seed for reproducibility.
+            scale (float or list of three floats): If a single float, the same scale is applied to hp1, hp2, and mu.
+                If a list (or tuple) of three floats, they are used as the scales for hp1, hp2, and mu respectively.
+        """
         torch.manual_seed(seed)  # For reproducibility
+
+        # Determine scale factors for hp1, hp2, and mu
+        if isinstance(scale, (list, tuple)):
+            if len(scale) == 3:
+                scale_hp1, scale_hp2, scale_mu = scale
+            else:
+                raise ValueError(
+                    "Scale must be a single float or a list/tuple of three floats.")
+        else:
+            scale_hp1 = scale_hp2 = scale_mu = scale
+
         for obs in self.observables.values():
             num_kernels = len(obs.kernel_types)
             obs.hp1_list = nn.ParameterList([
-                nn.Parameter(
-                    scale * torch.rand(1, device=obs.device, requires_grad=True))
+                nn.Parameter(scale_hp1 * torch.rand(1,
+                             device=obs.device, requires_grad=True))
                 for _ in range(num_kernels)
             ])
             obs.hp2_list = nn.ParameterList([
-                nn.Parameter(
-                    scale * torch.rand(1, device=obs.device, requires_grad=True))
+                nn.Parameter(scale_hp2 * torch.rand(1,
+                             device=obs.device, requires_grad=True))
                 for _ in range(num_kernels)
             ])
+            # Randomize mu_list if it exists (i.e. is not None)
+            if obs.mu_list is not None:
+                obs.mu_list = nn.ParameterList([
+                    nn.Parameter((-scale_mu/2) + scale_mu * torch.rand(*p.shape,
+                                 device=obs.device, requires_grad=True))
+                    for p in obs.mu_list
+                ])
 
     def train_observable(self, index, Xtrain, ytrain):
         if index not in self.observables:
@@ -672,6 +694,92 @@ class GPObservablesManager:
             ax.set_ylabel("X2")
             ax.set_zlabel("Mean")
             plt.show()
+
+    def print_parameters(self, indices=None, get_KTypes=True, get_noise=True, get_hp1=True, get_hp2=True, get_mu=True):
+        """
+        Prints a table with hyperparameter details for each GPObservable in scientific notation 
+        with 3 significant digits.
+
+        Each row corresponds to an observable (or only those specified via indices)
+        and includes the following columns (if requested):
+        - Observable index
+        - Kernel types (comma-separated)
+        - Noise value
+        - hp1 value(s)
+        - hp2 value(s)
+        - mu value(s)
+        """
+        # Determine which observables to print.
+        if indices is None:
+            indices = sorted(self.observables.keys())
+        else:
+            indices = [idx for idx in indices if idx in self.observables]
+
+        # Build the header based on requested columns.
+        headers = ["Index"]
+        if get_KTypes:
+            headers.append("Kernel Types")
+        if get_noise:
+            headers.append("Noise")
+        if get_hp1:
+            headers.append("hp1")
+        if get_hp2:
+            headers.append("hp2")
+        if get_mu:
+            headers.append("mu")
+
+        # Gather table rows.
+        rows = []
+        for idx in indices:
+            obs = self.observables[idx]
+            row = [str(idx)]
+            if get_KTypes:
+                row.append(", ".join(obs.kernel_types))
+            if get_noise:
+                row.append(f"{obs.noise.detach().cpu().item():.3e}")
+            if get_hp1:
+                hp1_str = ", ".join(
+                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
+                    "[" +
+                    ", ".join(f"{x:.3e}" for x in p.detach(
+                    ).cpu().view(-1).tolist()) + "]"
+                    for p in obs.hp1_list
+                )
+                row.append(hp1_str)
+            if get_hp2:
+                hp2_str = ", ".join(
+                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
+                    "[" +
+                    ", ".join(f"{x:.3e}" for x in p.detach(
+                    ).cpu().view(-1).tolist()) + "]"
+                    for p in obs.hp2_list
+                )
+                row.append(hp2_str)
+            if get_mu:
+                mu_str = ", ".join(
+                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
+                    "[" +
+                    ", ".join(f"{x:.3e}" for x in p.detach(
+                    ).cpu().view(-1).tolist()) + "]"
+                    for p in obs.mu_list
+                )
+                row.append(mu_str)
+            rows.append(row)
+
+        # Determine the maximum width for each column (for neat printing).
+        col_widths = [max(len(str(item)) for item in col)
+                      for col in zip(headers, *rows)]
+
+        # Print header.
+        header_line = " | ".join(header.ljust(width)
+                                 for header, width in zip(headers, col_widths))
+        print(header_line)
+        print("-" * len(header_line))
+
+        # Print each row.
+        for row in rows:
+            print(" | ".join(cell.ljust(width)
+                  for cell, width in zip(row, col_widths)))
 
 
 def getKoopman(manager, indices, Xall, nT, stateAug=False):
