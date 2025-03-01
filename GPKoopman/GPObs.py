@@ -548,20 +548,29 @@ class GPObservablesManager:
             raise ValueError('No observables available in manager.')
         return {idx: obs.get_parameters() for idx, obs in self.observables.items()}
 
-    def parameters(self, get_mu_only=False):
+    def parameters(self, idx=None, get_mu_only=False):
         """
         Returns a list of all optimizable parameters (hp1, hp2, mu, noise) from all GPObservable instances.
         """
-        params = []
-        if get_mu_only is True:
-            for obs in self.observables.values():
-                params.extend(obs.mu_list)
+        if idx is None:
+            params = []
+            if get_mu_only is True:
+                for obs in self.observables.values():
+                    params.extend(obs.mu_list)
+            else:
+                for obs in self.observables.values():
+                    params.extend(obs.hp1_list)
+                    params.extend(obs.hp2_list)
+                    params.extend(obs.mu_list)
+                    params.append(obs.noise)
+        elif isinstance(idx, int):
+
+            pass
+        elif isinstance(idx, list) and all(isinstance(index, int) for index in idx):
+            pass
         else:
-            for obs in self.observables.values():
-                params.extend(obs.hp1_list)
-                params.extend(obs.hp2_list)
-                params.extend(obs.mu_list)
-                params.append(obs.noise)
+            raise TypeError(
+                'Argument idx can be None or object of class int or list')
         return params
 
     def set_parameters(self, hp1_list=None, hp2_list=None, noise_list=None, mu_list=None):
