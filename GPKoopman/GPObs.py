@@ -421,7 +421,7 @@ class GPObservable:
         cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
         return cov
 
-    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False):
+    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
                 "Training data not found. Please call trainGP before optimizing hyperparameters.")
@@ -429,7 +429,8 @@ class GPObservable:
         # Store original references for hyperparameters and mu
         orig_hp1_list = self.hp1_list
         orig_hp2_list = self.hp2_list
-        orig_noise = self.noise
+        if opt_sigma:
+            orig_noise = self.noise
         if opt_mu:
             orig_mu_list = self.mu_list
 
@@ -440,19 +441,28 @@ class GPObservable:
             torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
         opt_hp2_list = [torch.nn.Parameter(
             torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
-        opt_noise = torch.nn.Parameter(
-            torch.nn.functional.softplus(orig_noise.detach()))
+        if opt_sigma:
+            opt_noise = torch.nn.Parameter(
+                torch.nn.functional.softplus(orig_noise.detach()))
         if opt_mu:
             opt_mu_list = [torch.nn.Parameter(
                 mu.detach()) for mu in orig_mu_list]
 
         # Include all parameters in the optimizer
-        if opt_mu:
+        if opt_mu and opt_sigma:
             optimizer = torch.optim.Adam(
                 [*opt_hp1_list, *opt_hp2_list, opt_noise, *opt_mu_list], lr=lr)
-        else:
+        elif opt_sigma and not opt_mu:
             optimizer = torch.optim.Adam(
                 [*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
+        elif opt_mu and not opt_sigma:
+            optimizer = torch.optim.Adam(
+                [*opt_hp1_list, *opt_hp2_list, *opt_mu_list], lr=lr)
+        else:
+            optimizer = torch.optim.Adam(
+                [*opt_hp1_list, *opt_hp2_list], lr=lr)
+
+
 
         for _ in range(max_iter):
             optimizer.zero_grad()
@@ -460,7 +470,10 @@ class GPObservable:
             # Convert softplus-transformed parameters back:
             hp1_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp1_list]
             hp2_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp2_list]
-            noise_opt = torch.nn.functional.softplus(opt_noise)
+            if opt_sigma:
+                noise_opt = torch.nn.functional.softplus(opt_noise)
+            else:
+                noise_opt = self.noise
             if opt_mu:
                 mu_opt = opt_mu_list  # no transformation for mu
             else:
@@ -473,7 +486,7 @@ class GPObservable:
                                                        kernel_types=self.kernel_types,
                                                        hp1_list=hp1_opt, hp2_list=hp2_opt,
                                                        mu_list=mu_opt,
-                                                       combination=self.combination) + jitter)
+                                                       combination=self.combination))
             except RuntimeError:
                 try:
                     iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
@@ -548,29 +561,20 @@ class GPObservablesManager:
             raise ValueError('No observables available in manager.')
         return {idx: obs.get_parameters() for idx, obs in self.observables.items()}
 
-    def parameters(self, idx=None, get_mu_only=False):
+    def parameters(self, get_mu_only=False):
         """
         Returns a list of all optimizable parameters (hp1, hp2, mu, noise) from all GPObservable instances.
         """
-        if idx is None:
-            params = []
-            if get_mu_only is True:
-                for obs in self.observables.values():
-                    params.extend(obs.mu_list)
-            else:
-                for obs in self.observables.values():
-                    params.extend(obs.hp1_list)
-                    params.extend(obs.hp2_list)
-                    params.extend(obs.mu_list)
-                    params.append(obs.noise)
-        elif isinstance(idx, int):
-
-            pass
-        elif isinstance(idx, list) and all(isinstance(index, int) for index in idx):
-            pass
+        params = []
+        if get_mu_only is True:
+            for obs in self.observables.values():
+                params.extend(obs.mu_list)
         else:
-            raise TypeError(
-                'Argument idx can be None or object of class int or list')
+            for obs in self.observables.values():
+                params.extend(obs.hp1_list)
+                params.extend(obs.hp2_list)
+                params.extend(obs.mu_list)
+                params.append(obs.noise)
         return params
 
     def set_parameters(self, hp1_list=None, hp2_list=None, noise_list=None, mu_list=None):
@@ -663,9 +667,9 @@ class GPObservablesManager:
             raise ValueError(f'Observable with index {index} does not exist.')
         return self.observables[index].predictCov(Xq)
 
-    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False):
+    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
         for obs in self.observables.values():
-            obs.optimize_hyperparameters(max_iter, lr, opt_mu=opt_mu)
+            obs.optimize_hyperparameters(max_iter, lr, opt_mu=opt_mu, opt_sigma=opt_sigma)
 
     def visualize2D(self, resolution=50, range_x=(-1, 1), range_y=(-1, 1)):
         """
