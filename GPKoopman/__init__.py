@@ -16,3 +16,7 @@ from .GPObs import GaussianKernel, ExpSineSqrKernel, ThinSplineKernel, InverseQu
 from .GPObs import GibbsExpAttractorKernel, ExplicitAttractorKernel
 from .GPObs import KernelFunction, getKoopman, getKoopman_control
 from .GPObs import GPObservable, GPObservablesManager
+
+# import utility functions
+from .utilities import plot_phase, plot_phase_w_bounds, plot_time_series_with_bounds, plot_predicted_sd_error
+from .utilities import check_pd, MatViz3d
