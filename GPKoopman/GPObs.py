@@ -625,16 +625,20 @@ class GPObservablesManager:
 
         for obs in self.observables.values():
             num_kernels = len(obs.kernel_types)
-            obs.hp1_list = nn.ParameterList([
-                nn.Parameter(scale_hp1 * torch.rand(1,
-                             device=obs.device, requires_grad=True))
-                for _ in range(num_kernels)
-            ])
-            obs.hp2_list = nn.ParameterList([
-                nn.Parameter(scale_hp2 * torch.rand(1,
-                             device=obs.device, requires_grad=True))
-                for _ in range(num_kernels)
-            ])
+            if scale_hp1 is not None:
+                obs.hp1_list = nn.ParameterList([
+                    nn.Parameter(scale_hp1 * torch.rand(1,
+                                                        device=obs.device, requires_grad=True))
+                    for _ in range(num_kernels)
+                ])
+
+            if scale_hp2 is not None:
+                obs.hp2_list = nn.ParameterList([
+                    nn.Parameter(scale_hp2 * torch.rand(1,
+                                                        device=obs.device, requires_grad=True))
+                    for _ in range(num_kernels)
+                ])
+
             # Randomize mu_list if it exists (i.e. is not None)
             if obs.mu_list is not None and scale_mu is not None:
                 obs.mu_list = nn.ParameterList([
