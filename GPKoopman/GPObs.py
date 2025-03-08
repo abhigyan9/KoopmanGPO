@@ -590,15 +590,15 @@ class GPObservablesManager:
 
             if hp1_list is not None:
                 for k in range(num_kernels):
-                    obs.hp1_list[k].data = hp1_list[i + k].data
+                    obs.hp1_list[k].data = hp1_list[i + k].data.to(obs.device)
             if hp2_list is not None:
                 for k in range(num_kernels):
-                    obs.hp2_list[k].data = hp2_list[i + k].data
+                    obs.hp2_list[k].data = hp2_list[i + k].data.to(obs.device)
             if noise_list is not None:
-                obs.noise.data = noise_list[i].data
+                obs.noise.data = noise_list[i].data.to(obs.device)
             if mu_list is not None:
                 for k in range(num_kernels):
-                    obs.mu_list[k].data = mu_list[i + k].data
+                    obs.mu_list[k].data = mu_list[i + k].data.to(obs.device)
 
             i += num_kernels
 
