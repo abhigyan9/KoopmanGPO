@@ -1,12 +1,11 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import math
 from matplotlib.patches import Ellipse
-
+from sklearn.cluster import KMeans
 
 # Plotting Functions
+
 
 def plot_time_series_with_bounds(time, Xhat, Xcvhat, SimData, idx, N, system_name, title_suffix, sim_offset=0):
     """
@@ -305,3 +304,37 @@ def MatViz3d(matrix: torch.Tensor):
         f'3D Surface Plot | Max={np.max(matrix_np)}, Min={np.min(matrix_np)}')
 
     plt.show()
+
+
+# K-Means Clusting helper function
+
+def get_kmeans(data, num_centers=1):
+    """
+    Compute K-Means clustering for the given data and return cluster centroids.
+
+    Args:
+        data (torch.Tensor or np.ndarray): Data of shape (dimension, samples).
+        num_centers (int): Number of cluster centers (clusters) to compute.
+
+    Returns:
+        torch.Tensor: Cluster centroids of shape (dimension, num_centers).
+    """
+    # Convert data to NumPy array if necessary
+    if isinstance(data, torch.Tensor):
+        data_np = data.detach().cpu().numpy()
+    else:
+        data_np = np.array(data)
+
+    # Transpose data to shape (samples, dimension) for scikit-learn
+    data_np = data_np.T
+
+    # Perform k-means clustering
+    kmeans = KMeans(n_clusters=num_centers, random_state=0).fit(data_np)
+
+    # Get centroids; shape will be (num_centers, dimension)
+    centroids_np = kmeans.cluster_centers_
+
+    # Convert centroids to a torch tensor and transpose to shape (dimension, num_centers)
+    centroids = torch.from_numpy(centroids_np.T).float()
+
+    return centroids

@@ -1,6 +1,6 @@
-import math
 import itertools
 import torch
+from .autonomous import sim_LTI
 
 # Extended Dynamic Mode Decomposition
 
@@ -98,7 +98,7 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
         ZedTrain[j, :, 0] = phi_batch(ICsetTrain[:, j].view(n, 1)).view(
             p,)        # n+i for state-augmentation
 
-        ZedTrain[j, :, :], XedTrain[j, :, :] = gpk.sim_LTI(
+        ZedTrain[j, :, :], XedTrain[j, :, :] = sim_LTI(
             ZedTrain[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None)
         TrainRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
             (XedTrain[j, :, :] - SimData[j, :, :N])**2, 1))
@@ -114,7 +114,7 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
         ZedTest[j, :, 0] = phi_batch(ICsetTest[:, j].view(n, 1)).view(
             p,)          # n+i for state-augmentation
 
-        ZedTest[j, :, :], XedTest[j, :, :] = gpk.sim_LTI(
+        ZedTest[j, :, :], XedTest[j, :, :] = sim_LTI(
             ZedTest[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None)
         TestRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
             (XedTest[j, :, :] - SimData[nTest+j, :, :N])**2, 1))
@@ -255,8 +255,8 @@ def eDMD_RBF(SimData, nTrain, nTest, centers, width=None, rbf_type='gaussian', s
         ZedTrain[j, :, 0] = rbf_observable(ICsetTrain[:, j].view(
             n, 1), centers, width, rbf_type, state_aug).view(p,)
         # Simulate the lifted linear system.
-        ZedTrain[j, :, :], XedTrain[j, :, :] = gpk.sim_LTI(ZedTrain[j, :, 0], A_edmd, C_edmd,
-                                                           num_steps=N, ts=None, x0cv=None)
+        ZedTrain[j, :, :], XedTrain[j, :, :] = sim_LTI(ZedTrain[j, :, 0], A_edmd, C_edmd,
+                                                       num_steps=N, ts=None, x0cv=None)
         # Compute RMSE on the j-th trajectory.
         TrainRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
             (XedTrain[j, :, :] - SimData[j, :, :N])**2, dim=1))
@@ -269,8 +269,8 @@ def eDMD_RBF(SimData, nTrain, nTest, centers, width=None, rbf_type='gaussian', s
     for j in range(nTest):
         ZedTest[j, :, 0] = rbf_observable(ICsetTest[:, j].view(
             n, 1), centers, width, rbf_type, state_aug).view(p,)
-        ZedTest[j, :, :], XedTest[j, :, :] = gpk.sim_LTI(ZedTest[j, :, 0], A_edmd, C_edmd,
-                                                         num_steps=N, ts=None, x0cv=None)
+        ZedTest[j, :, :], XedTest[j, :, :] = sim_LTI(ZedTest[j, :, 0], A_edmd, C_edmd,
+                                                     num_steps=N, ts=None, x0cv=None)
         TestRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
             (XedTest[j, :, :] - SimData[nTrain+j, :, :N])**2, dim=1))
 
