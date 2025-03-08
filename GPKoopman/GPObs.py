@@ -636,7 +636,7 @@ class GPObservablesManager:
                 for _ in range(num_kernels)
             ])
             # Randomize mu_list if it exists (i.e. is not None)
-            if obs.mu_list is not None:
+            if obs.mu_list is not None and scale_mu is not None:
                 obs.mu_list = nn.ParameterList([
                     nn.Parameter((-scale_mu/2) + scale_mu * torch.rand(*p.shape,
                                  device=obs.device, requires_grad=True))
