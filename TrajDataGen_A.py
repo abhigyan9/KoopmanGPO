@@ -37,7 +37,7 @@ def generate_initial_conditions(system, num_trajectories):
         x1 = torch.tensor(np.random.uniform(1., 1.5, size=(
             1, num_trajectories)), dtype=torch.float64)
         return torch.vstack([x0, x1])
-    elif system == "Piecewise Linear":
+    elif system == "Piecewise Linear" or system == "PWL Discrete":
         return torch.tensor(np.random.uniform(0., 1., size=(1, num_trajectories)), dtype=torch.float64)
     else:
         raise ValueError('Invalid System Name')
@@ -56,7 +56,8 @@ def generate_and_save_data():
         # "Simple Pendulum": (gpk.f_SDP, 2, 0.02),
         # "Lorenz": (gpk.f_Lorenz, 3, 0.01), # params=torch.tensor([10., 8./3., 0.8])
         # "Lotka Volterra": (gpk.f_LotkaVolterra, 2, 0.1),
-        "Piecewise Linear": (gpk.f_PWL1, 1, 1.)
+        # "Piecewise Linear": (gpk.f_PWL1, 1, 2.)
+        "PWL Discrete": (gpk.df_PWL, 1, 1.)
     }
 
     for system_name, (fx, state_dim, ts) in systems.items():
@@ -65,8 +66,12 @@ def generate_and_save_data():
 
         x0 = generate_initial_conditions(system_name, num_trajectories)
         for j in range(num_trajectories):
-            states = gpk.sim_RK4(
-                fx, x0[:, j], ts, num_steps+1, params=None)
+            if system_name == 'PWL Discrete':
+                states = gpk.sim_discrete(
+                    fx, x0[:, j], ts, num_steps+1, params=None)
+            else:
+                states = gpk.sim_RK4(
+                    fx, x0[:, j], ts, num_steps+1, params=None)
 
             trajectories.append(states)
             initial_conditions.append(x0)

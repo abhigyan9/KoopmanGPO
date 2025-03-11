@@ -3,8 +3,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 # import functions from autonomous.py
-from .autonomous import f_UDO, f_VDP, f_Lorenz, f_LotkaVolterra, f_SDP, f_PWL1
-from .autonomous import sim_RK4, sim_LTI
+from .autonomous import f_UDO, f_VDP, f_Lorenz, f_LotkaVolterra, f_SDP, f_PWL1, df_PWL
+from .autonomous import sim_RK4, sim_LTI, sim_discrete
 
 # import functions from non_autonomous.py
 from .non_autonomous import sim_LTI_nonautonomous, sim_RK4_nonautonomous, fc_DO, fc_PoC, fc_SDP

@@ -85,7 +85,7 @@ def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offs
         ax.set_zlabel("X3")
         ax.legend()
         plt.show()
-    else:
+    elif n_states == 2:
         # Default to a 2D phase plot (using the first two state dimensions)
         plt.figure(figsize=(6, 4.5))
         plt.plot(Xhat[idx, 0, :], Xhat[idx, 1, :], label='iGPK')
@@ -99,6 +99,9 @@ def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offs
         plt.legend()
         plt.grid()
         plt.show()
+
+    else:
+        print('Trajecotry plots are available only for 2 or 3 state systems')
 
 
 def plot_phase_w_bounds(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offset=0, Xcvhat=None, ellipse_interval=10):

@@ -57,12 +57,23 @@ def f_PWL1(x, params=None):
         params = torch.tensor([0.31, 0.94, -3., 0.32])
         # params = a, b, c, x*
     # assumed that sample-time if 1.
-    if x[0] < 0.:
-        dx0 = params[2] * x[0] - params[2] * params[3] - x[0]
+    if x[0] < params[3]:
+        dx0 = (params[2] * x[0] - params[2] * params[3] - x[0]) / 1.
     else:
-        dx0 = params[1] * x[0] + params[0] - params[1] * params[3] - x[0]
+        dx0 = (params[1] * x[0] + params[0] -
+               params[1] * params[3] - x[0]) / 1.
 
     return torch.tensor([dx0], dtype=torch.float64)
+
+
+def df_PWL(x, params=None):
+    if params is None:
+        params = torch.tensor([0.31, 0.94, -3., 0.32], dtype=torch.float64)
+    if x[0] <= params[3]:
+        xp0 = params[2] * (x[0] - params[3])
+    else:
+        xp0 = params[1] * (x[0] - params[3]) + params[0]
+    return torch.tensor([xp0], dtype=torch.float64)
 
 
 def sim_RK4(fx, x0, ts, num_steps, params=None):
@@ -79,6 +90,31 @@ def sim_RK4(fx, x0, ts, num_steps, params=None):
         k4 = fx(x + ts*k3, params)
 
         states[:, t+1] = x + (ts/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+    return states
+
+
+def sim_discrete(f, x0, ts, num_steps, params=None):
+    """
+    Simulate a discrete-time system.
+
+    Args:
+        f: Callable function of the form f(x, params) defining the discrete map.
+        x0: Initial state as a torch tensor of shape (n,).
+        ts: Sample time (float). For discrete maps, this is assumed to be 1 and is not used.
+        num_steps: Number of simulation steps (int).
+        params: Optional parameters to pass to f (default: None).
+
+    Returns:
+        states: Tensor of shape (n, num_steps) containing the simulated states.
+    """
+    n = x0.shape[0]
+    states = torch.zeros((n, num_steps), dtype=torch.float64)
+    states[:, 0] = x0
+
+    for t in range(num_steps - 1):
+        # For discrete maps, the next state is simply given by applying f to the current state.
+        states[:, t+1] = f(states[:, t], params)
 
     return states
 
