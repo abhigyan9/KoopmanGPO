@@ -330,16 +330,25 @@ class GPObservable:
                              mu_list=self.mu_list, combination=self.combination)
         return (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
 
-    def forward(self, Xq):
+    def forward(self, Xq, ytrain):
         """
         Fully differentiable forward pass that computes predictions using the current hyperparameters.
         """
         Xq = Xq.to(self.device)
+        ytrain = ytrain.to(self.device)
+
+        # hp1_list = [torch.nn.functional.softplus(
+        #     r, beta=10.) for r in self.hp1_list]
+        # hp2_list = [torch.nn.functional.softplus(
+        #     r, beta=10.) for r in self.hp2_list]
+        hp1_list = self.hp1_list
+        hp2_list = self.hp2_list
+
         Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             hp1_list=hp1_list, hp2_list=hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
         Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             hp1_list=hp1_list, hp2_list=hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
         # L = torch.linalg.cholesky(
         #     (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
@@ -354,19 +363,21 @@ class GPObservable:
             S_inv = torch.diag(torch.where(
                 S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
             invKmm = V.T @ S_inv @ U.T
-        alpha = invKmm @ Kmn @ self.y
+        alpha = invKmm @ Kmn @ ytrain
         Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             hp1_list=hp1_list, hp2_list=hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
         mean = Kqm @ alpha
         cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
         return mean, cov
 
-    def forward_mean(self, Xq):
+    def forward_mean(self, Xq, ytrain):
         """
         Fully differentiable forward pass that computes predictive mean using current hyperparameters
         """
         Xq = Xq.to(self.device)
+        ytrain = ytrain.to(self.device)
+
         Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
@@ -385,7 +396,7 @@ class GPObservable:
             S_inv = torch.diag(torch.where(
                 S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
             invKmm = V.T @ S_inv @ U.T
-        alpha = invKmm @ Kmn @ self.y
+        alpha = invKmm @ Kmn @ ytrain
         Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
