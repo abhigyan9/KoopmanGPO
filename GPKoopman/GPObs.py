@@ -802,7 +802,7 @@ class GPObservablesManager:
                   for cell, width in zip(row, col_widths)))
 
 
-def getKoopman(manager, indices, Xall, nT, stateAug=False):
+def getKoopman(manager:GPObservablesManager, indices:list, Xall:torch.tensor, nT, stateAug=False):
     """
     Compute Koopman A matrix using the manager for GPObservables.
 
@@ -830,8 +830,8 @@ def getKoopman(manager, indices, Xall, nT, stateAug=False):
     Xplus = torch.cat([Xall[:, j*(N+1)+1:j*(N+1)+N+1]
                       for j in range(nT)], dim=1)  # Time-shifted data matrix
 
-    M = torch.empty((p, N*nT))
-    Mplus = torch.empty((p, N*nT))
+    M = torch.empty((p, N*nT), device=Xall.device)
+    Mplus = torch.empty((p, N*nT), device=Xall.device)
     for i in range(p):
         M[i, :] = torch.transpose(manager.predict_mean(i, X), dim0=0, dim1=-1)
         Mplus[i, :] = torch.transpose(
