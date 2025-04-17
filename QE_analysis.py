@@ -247,7 +247,7 @@ SYSTEM_NAME = 'Unforced Duffing'
 P, L, MAX_ITER = 30, 10, 500
 OPT_ALGO = 'Adam'
 
-TRAINING_FRACTIONS = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]
+TRAINING_FRACTIONS = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
 results = {}
 
