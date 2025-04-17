@@ -201,7 +201,7 @@ def iGPK_vanilla(system_name: str, nTrain: float, p: int, l: int, max_iter: int,
     lambda1, lambda2, lambda3 = 1e-2, 10., 0.
 
     if opt_algo == 'Adam':  # Non-Stochastic | Faster Convergence, lesser exploration
-        optimizer = torch.optim.Adam([Z], lr=0.01)
+        optimizer = torch.optim.Adam([Z], lr=0.02)
     elif opt_algo == 'SGD':  # More Exploration
         optimizer = torch.optim.SGD([Z], lr=0.002, momentum=0.9, nesterov=True)
     else:
@@ -243,7 +243,7 @@ def iGPK_vanilla(system_name: str, nTrain: float, p: int, l: int, max_iter: int,
 #############################
 #   1. EXPERIMENTAL SETUP   #
 #############################
-SYSTEM_NAME = 'Unforced Duffing'
+SYSTEM_NAME = 'Simple Pendulum'
 P, L, MAX_ITER = 30, 10, 500
 OPT_ALGO = 'Adam'
 
@@ -272,6 +272,13 @@ for frac in TRAINING_FRACTIONS:  # iterate over fractions
     # compute eigenvalues of A
     eigs = torch.linalg.eigvals(A).cpu().numpy()
     results[frac] = eigs
+
+# build a dict of simple string keys → arrays
+npz_dict = { f"frac_{int(frac*100)}": eigs for frac, eigs in results.items() }
+
+# save
+today = datetime.date.today()
+np.savez(f"eigen_spectra_{today}.npz", **npz_dict)
 
 
 ###########################
