@@ -278,7 +278,7 @@ npz_dict = { f"frac_{int(frac*100)}": eigs for frac, eigs in results.items() }
 
 # save
 today = datetime.date.today()
-np.savez(f"eigen_spectra_{today}.npz", **npz_dict)
+np.savez(f"eigen_spectra_{SYSTEM_NAME}_{today}.npz", **npz_dict)
 
 
 ###########################
