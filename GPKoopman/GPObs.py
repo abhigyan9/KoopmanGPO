@@ -802,7 +802,7 @@ class GPObservablesManager:
                   for cell, width in zip(row, col_widths)))
 
 
-def getKoopman(manager:GPObservablesManager, indices:list, Xall:torch.tensor, nT, stateAug=False):
+def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor, nT, stateAug=False):
     """
     Compute Koopman A matrix using the manager for GPObservables.
 

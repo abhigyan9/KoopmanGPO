@@ -55,6 +55,7 @@ def generate_and_save_data():
             "trajectories": torch.stack(trajectories),
             "inputs": torch.stack(inputs),
             "initial_conditions": torch.stack(initial_conditions),
+            "num_trajectories": num_trajectories,
             "sample_time": ts,
             "num_steps": num_steps,
         }
