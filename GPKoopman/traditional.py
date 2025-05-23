@@ -279,3 +279,68 @@ def eDMD_RBF(SimData, nTrain, nTest, centers, width=None, rbf_type='gaussian', s
     TrainRMSE_eDMD, TestRMSE_eDMD = TrainRMSE_eDMD.detach(), TestRMSE_eDMD.detach()
 
     return A_edmd, C_edmd, XedTrain, XedTest, TrainRMSE_eDMD, TestRMSE_eDMD
+
+
+# Subspace Identification driven GP-Koopman
+# adapted from Holocomb and Bitmead 2017, Lian and Jones 2019, Loya et al. 2023
+def SSID(inputs: torch.Tensor, outputs: torch.Tensor, delay: int, sys_dim: int):
+    """
+    Constructs a higher-dimensional LTI system from input-output data using the 
+    multi-trajectory subspace identification algorithm presented in Holocomb and Bitmead 2017
+    Args:
+        inputs (torch.Tensor): 
+        outputs (torch.Tensor):
+        delay (int): Number of time-delayed embeddings to consider
+        sys_dim (int): Dimensionality of lifted linear system
+    Returns:
+        A (torch.Tensor):
+        B (torch.Tensor):
+        C (torch.Tensor):
+        D (torch.Tensor):
+        z0 (torch.Tensor):
+    """
+    nT, nu, N = inputs.shpae()
+    ny = outputs.shape[1]
+    cols_per_traj = N - delay
+
+    # construct mosaic-Hankel matrices
+    Y_l = torch.empty((ny + ny*delay, nT * cols_per_traj))
+    Y_lj = torch.empty((ny + ny*delay, cols_per_traj))
+    for j in range(nT):
+        if delay == 0:
+            Y_lj = outputs[j, :, :]
+        else:
+            for k in range(N-delay-1):
+                Y_lj[:, k] = torch.cat([outputs[j, :, i]
+                                       for i in range(delay + k)])
+        start_col = j * cols_per_traj
+        end_col = (j+1) * cols_per_traj
+        Y_l[:, start_col:end_col] = Y_lj
+
+    U_l = torch.empty((nu + nu*delay, nT * cols_per_traj))
+    U_lj = torch.empty((nu + nu*delay, cols_per_traj))
+    for j in range(nT):
+        if delay == 0:
+            U_lj = inputs[j, :, :]
+        else:
+            for k in range(N-delay-1):
+                U_lj[:, k] = torch.cat([inputs[j, :, i]
+                                       for i in range(delay + k)])
+        start_col = j * cols_per_traj
+        end_col = (j+1) * cols_per_traj
+        U_l[:, start_col:end_col] = U_lj
+
+    # Column-space projection
+    pi_ul = torch.eye(nT) - U_l.T * torch.linalg.pinv(U_l * U_l.T) * U_l
+
+    # SVD and A-C identification
+    U, S, _ = torch.linalg.svd(Y_l * pi_ul)
+    gamma_r = U[:, :sys_dim] * (S[:sys_dim, :sys_dim] ** 0.5)
+    C = gamma_r[:ny, :]
+    A = torch.linalg.pinv(gamma_r[:(N-1)*ny, :]) * gamma_r[ny: ny*N, :]
+
+    # Vectorize
+
+    # Regression
+
+    return A, B, C, D, z0m
