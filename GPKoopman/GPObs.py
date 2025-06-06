@@ -432,6 +432,33 @@ class GPObservable:
         cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
         return cov
 
+    def forward_G(self, Xq):
+        """
+        Fully differentiable forward pass that computes the kernel covariance matrix at given query point(s)
+        """
+        Xq = Xq.to(self.device)
+        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        try:
+            L = torch.linalg.cholesky(
+                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+            invKmm = torch.cholesky_inverse(L)
+        except RuntimeError:
+            U, S, V = torch.linalg.svd(
+                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+            S_inv = torch.diag(torch.where(
+                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+            invKmm = V.T @ S_inv @ U.T
+        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        G = Kqm @ invKmm @ Kmn
+        return G
+
     def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
         if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
             raise ValueError(
