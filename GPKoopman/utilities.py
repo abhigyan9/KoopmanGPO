@@ -309,6 +309,58 @@ def MatViz3d(matrix: torch.Tensor):
     plt.show()
 
 
+def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
+    """
+    Visualize a 2D PyTorch tensor as either a 3D surface or a 2D heatmap.
+
+    Args:
+        matrix (torch.Tensor): A 2D tensor of shape (rows, cols).
+        plot_type (str): 'surf' for a 3D surface plot, 'heat' for a 2D heatmap.
+
+    Raises:
+        ValueError: If the input is not 2D or plot_type is invalid.
+    """
+    # Validate inputs
+    if matrix.dim() != 2:
+        raise ValueError("Input must be a 2D tensor")
+    if plot_type not in ('surf', 'heat'):
+        raise ValueError("plot_type must be either 'surf' or 'heat'")
+
+    # Convert to NumPy
+    matrix_np = matrix.cpu().detach().numpy()
+    vmin, vmax = matrix_np.min(), matrix_np.max()
+
+    if plot_type == 'heat':
+        # 2D heatmap
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = ax.imshow(matrix_np, cmap='viridis',
+                       aspect='auto', vmin=vmin, vmax=vmax)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label('Element Value')
+        ax.set_xlabel('Column Index')
+        ax.set_ylabel('Row Index')
+        ax.set_title(f'Heatmap | Max={vmax:.3g}, Min={vmin:.3g}')
+        plt.show()
+
+    else:
+        # 3D surface plot
+        x = np.arange(matrix_np.shape[1])
+        y = np.arange(matrix_np.shape[0])
+        X, Y = np.meshgrid(x, y)
+
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(
+            X, Y, matrix_np, cmap='viridis', edgecolor='k', vmin=vmin, vmax=vmax)
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.6)
+        cbar.set_label('Element Value')
+        ax.set_xlabel('Column Index')
+        ax.set_ylabel('Row Index')
+        ax.set_zlabel('Value')
+        ax.set_title(f'3D Surface Plot | Max={vmax:.3g}, Min={vmin:.3g}')
+        plt.show()
+
+
 # K-Means Clusting helper function
 
 def get_kmeans(data, num_centers=1):
