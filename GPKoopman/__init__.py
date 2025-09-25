@@ -23,4 +23,4 @@ from .utilities import get_kmeans
 
 # import eDMD functions
 from .traditional import generate_basis, generate_basis_batch, eDMD_poly
-from .traditional import rbf_observable, eDMD_RBF
+from .traditional import rbf_observable, eDMD_RBF_kmeans

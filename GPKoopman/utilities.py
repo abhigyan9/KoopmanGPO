@@ -48,7 +48,7 @@ def plot_time_series_with_bounds(time, Xhat, Xcvhat, SimData, idx, N, system_nam
 
     axes[-1].set_xlabel('Time [s]')
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
 
 def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offset=0):
@@ -84,7 +84,7 @@ def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offs
         ax.set_ylabel("X2")
         ax.set_zlabel("X3")
         ax.legend()
-        plt.show()
+        # plt.show()
     elif n_states == 2:
         # Default to a 2D phase plot (using the first two state dimensions)
         plt.figure(figsize=(6, 4.5))
@@ -98,7 +98,7 @@ def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offs
         plt.ylabel("X2")
         plt.legend()
         plt.grid()
-        plt.show()
+        # plt.show()
 
     else:
         print('Trajecotry plots are available only for 2 or 3 state systems')
@@ -142,7 +142,7 @@ def plot_phase_w_bounds(Xhat, SimData, ICset, idx, N, system_name, title_suffix,
         ax.set_ylabel("X2")
         ax.set_zlabel("X3")
         ax.legend()
-        plt.show()
+        # plt.show()
 
     elif n_states == 2:  # 2-D phase plot
         # Create a 2D phase plot
@@ -184,7 +184,7 @@ def plot_phase_w_bounds(Xhat, SimData, ICset, idx, N, system_name, title_suffix,
         plt.ylabel("X2")
         plt.legend()
         plt.grid()
-        plt.show()
+        # plt.show()
 
     else:   # Dimension mismatch
         raise ValueError('Size of Xhat in dimension 1 has to be 2 or 3')
@@ -235,7 +235,7 @@ def plot_predicted_sd_error(XcvhatTest, SimData, XhatTest, idx, N, nTrain, traje
 
     axes[-1].set_xlabel('Time Step')
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
 
 # Matrix Functions
@@ -306,7 +306,7 @@ def MatViz3d(matrix: torch.Tensor):
     ax.set_title(
         f'3D Surface Plot | Max={np.max(matrix_np)}, Min={np.min(matrix_np)}')
 
-    plt.show()
+    # plt.show()
 
 
 def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
@@ -340,7 +340,7 @@ def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
         ax.set_xlabel('Column Index')
         ax.set_ylabel('Row Index')
         ax.set_title(f'Heatmap | Max={vmax:.3g}, Min={vmin:.3g}')
-        plt.show()
+        # plt.show()
 
     else:
         # 3D surface plot
@@ -358,7 +358,7 @@ def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
         ax.set_ylabel('Row Index')
         ax.set_zlabel('Value')
         ax.set_title(f'3D Surface Plot | Max={vmax:.3g}, Min={vmin:.3g}')
-        plt.show()
+        # plt.show()
 
 
 # K-Means Clusting helper function

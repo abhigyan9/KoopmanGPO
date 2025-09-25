@@ -1,6 +1,7 @@
 import itertools
 import torch
 from .autonomous import sim_LTI
+from .utilities import get_kmeans
 
 # Extended Dynamic Mode Decomposition
 
@@ -127,6 +128,7 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
 
 # eDMD based on Radial Basis Function Observables
 
+
 def rbf_observable(x, centers, width=None, rbf_type='gaussian', state_aug=False):
     """
     Computes RBF values for a set of points x given multiple centers, with a choice
@@ -193,7 +195,7 @@ def rbf_observable(x, centers, width=None, rbf_type='gaussian', state_aug=False)
         return phi
 
 
-def eDMD_RBF(SimData, nTrain, nTest, centers, width=None, rbf_type='gaussian', state_aug=False):
+def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='gaussian', state_aug=False):
     """
     Extended Dynamic Mode Decomposition (eDMD) using RBF observables defined via rbf_observable.
 
@@ -226,9 +228,7 @@ def eDMD_RBF(SimData, nTrain, nTest, centers, width=None, rbf_type='gaussian', s
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
                           for j in range(nTrain, nTrain + nTest)], dim=1)
 
-    # Define the observable lifting function using rbf_observable.
-    # It accepts inputs of shape (state_dim, num_points) and returns (m, num_points)
-    # phi_batch = lambda X: rbf_observable(X, centers, width, rbf_type, state_aug)
+    centers = get_kmeans(X, num_centers)
 
     # Lift the data.
     # shape: (m, total training samples)
