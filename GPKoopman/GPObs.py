@@ -551,7 +551,7 @@ class GPObservable:
             invK_til = torch.linalg.inv(K_til)
 
             log_det = torch.logdet(K_til)
-            ll = -0.5 * (self.y.T @ invK_til @ self.y + log_det +
+            ll = -0.5 * (self.y @ invK_til @ self.y + log_det +
                          self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
             loss = -ll.squeeze()
             loss.backward()

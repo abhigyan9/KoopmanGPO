@@ -88,42 +88,52 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
     C_edmd = X @ torch.linalg.pinv(phi_x)
     p = C_edmd.shape[1]
 
-    # Evaluation on training set
-    ZedTrain = torch.empty((nTrain, p, N))    # n+p for state-augmentation
-    # ZmeanTrain[:, :n, 0] = ICsetTrain.T    # only for state-augmentation
-
+    # ---------- Training ----------
+    ZedTrain = torch.empty((nTrain, p, N))
     XedTrain = torch.empty((nTrain, n, N))
-    TrainRMSE_eDMD = torch.empty((nTrain, n))
+    TrainNRMSE_eDMD = torch.empty((nTrain, n))
 
-    for j in range(nTrain):  # Prediction for all training trajectories
-        ZedTrain[j, :, 0] = phi_batch(ICsetTrain[:, j].view(n, 1)).view(
-            p,)        # n+i for state-augmentation
-
+    for j in range(nTrain):
+        ZedTrain[j, :, 0] = phi_batch(ICsetTrain[:, j].view(n, 1)).view(p,)
         ZedTrain[j, :, :], XedTrain[j, :, :] = sim_LTI(
-            ZedTrain[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None)
-        TrainRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
-            (XedTrain[j, :, :] - SimData[j, :, :N])**2, 1))
+            ZedTrain[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None
+        )
 
-    # Evaluation on test set
+        errors = XedTrain[j] - SimData[j, :, :N]
+        rmse = torch.sqrt(torch.mean(errors**2, dim=1))
+
+        true_vals = SimData[j, :, :N]
+        range_vals = true_vals.max(dim=1).values - true_vals.min(dim=1).values
+        range_vals = torch.where(
+            range_vals == 0, torch.ones_like(range_vals), range_vals)
+
+        TrainNRMSE_eDMD[j] = rmse / range_vals
+
+    # ---------- Testing ----------
     ZedTest = torch.empty((nTest, p, N))
-    # ZmeanTest[:, :n, 0] = ICsetTest.T  # only for state-augmentation
-
     XedTest = torch.empty((nTest, n, N))
-    TestRMSE_eDMD = torch.empty((nTest, n))
+    TestNRMSE_eDMD = torch.empty((nTest, n))
 
-    for j in range(nTest):  # Prediction for all testing trajectories
-        ZedTest[j, :, 0] = phi_batch(ICsetTest[:, j].view(n, 1)).view(
-            p,)          # n+i for state-augmentation
-
+    for j in range(nTest):
+        ZedTest[j, :, 0] = phi_batch(ICsetTest[:, j].view(n, 1)).view(p,)
         ZedTest[j, :, :], XedTest[j, :, :] = sim_LTI(
-            ZedTest[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None)
-        TestRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
-            (XedTest[j, :, :] - SimData[nTest+j, :, :N])**2, 1))
+            ZedTest[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None
+        )
+
+        errors = XedTest[j] - SimData[nTrain+j, :, :N]
+        rmse = torch.sqrt(torch.mean(errors**2, dim=1))
+
+        true_vals = SimData[nTrain+j, :, :N]
+        range_vals = true_vals.max(dim=1).values - true_vals.min(dim=1).values
+        range_vals = torch.where(
+            range_vals == 0, torch.ones_like(range_vals), range_vals)
+
+        TestNRMSE_eDMD[j] = rmse / range_vals
 
     XedTrain, XedTest = XedTrain.detach(), XedTest.detach()
-    TestRMSE_eDMD, TrainRMSE_eDMD = TestRMSE_eDMD.detach(), TrainRMSE_eDMD.detach()
+    TestNRMSE_eDMD, TrainNRMSE_eDMD = TestNRMSE_eDMD.detach(), TrainNRMSE_eDMD.detach()
 
-    return A_edmd, C_edmd, XedTrain, XedTest, TrainRMSE_eDMD, TestRMSE_eDMD
+    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD
 
 
 # eDMD based on Radial Basis Function Observables

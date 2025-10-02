@@ -7,6 +7,155 @@ from sklearn.cluster import KMeans
 # Plotting Functions
 
 
+def compare_model_predictions(
+    time,
+    models,
+    SimData,
+    idx,
+    N,
+    system_name,
+    title_suffix="",
+    *,
+    split="train",                    # "train" or "test"
+    sim_offset=0,                     # e.g., nTrain for test set
+    compare_to="SimData",             # "SimData" or "SimData_clean"
+    SimData_clean=None,               # required if compare_to="SimData_clean"
+    sigma=1.0,                        # number of std-devs for bands (iGPK)
+    colors=None                       # optional color map per model
+):
+    """
+    Compare time-series predictions from multiple models to ground truth, with optional uncertainty bands.
+
+    Parameters
+    ----------
+    time : 1D tensor/array of length N
+    models : list of dicts, one per model. Each dict should contain:
+        {
+          "name": "iGPK",
+          # For the chosen 'split' (train/test), provide tensors shaped as below.
+          # Xhat_* : (nTraj, nStates, N)
+          # Xcvhat_* : (nTraj, nStates, nStates, N)  (optional; if absent → deterministic line)
+          "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain (optional)},
+          "test" : {"Xhat": XhatTest,  "Xcvhat": XcvhatTest  (optional)}
+        }
+    SimData : tensor of shape (numTraj, nStates, N_total)
+        Ground truth (noisy or clean, depending on your dataset). For test plots,
+        use sim_offset=nTrain to index into test trajectories.
+    idx : int
+        Which trajectory index to plot (within the chosen split).
+    N : int
+        Number of time steps to plot.
+    system_name : str
+    title_suffix : str
+    split : {"train","test"}
+    sim_offset : int
+        Added to SimData's first index to align with chosen split.
+    compare_to : {"SimData","SimData_clean"}
+        Choose which ground truth to overlay. If "SimData_clean", pass SimData_clean.
+    SimData_clean : tensor like SimData
+    sigma : float
+        Width of the uncertainty band in standard deviations for stochastic models (e.g., iGPK).
+    colors : dict or list
+        Optional mapping from model name → color string, or a list of colors matching `models` order.
+
+    Notes
+    -----
+    - Any model entry without 'Xcvhat' is treated as deterministic (no bands).
+    - Works for any state dimension; creates one subplot per state.
+    - If `nStates == 1`, returns a single-axis figure for convenience.
+    """
+
+    assert split in ("train", "test"), "split must be 'train' or 'test'"
+
+    # Pick ground truth
+    if compare_to == "SimData":
+        GT = SimData
+    elif compare_to == "SimData_clean":
+        if SimData_clean is None:
+            raise ValueError(
+                "compare_to='SimData_clean' requires SimData_clean")
+        GT = SimData_clean
+    else:
+        raise ValueError("compare_to must be 'SimData' or 'SimData_clean'")
+
+    # Infer state dimension from the first model
+    if len(models) == 0:
+        raise ValueError("`models` cannot be empty.")
+    Xhat0 = models[0][split]["Xhat"]
+    n_states = Xhat0.shape[1]
+
+    # Colors
+    default_cycle = plt.rcParams['axes.prop_cycle'].by_key().get(
+        'color', ['C0', 'C1', 'C2', 'C3', 'C4', 'C5'])
+    if isinstance(colors, dict):
+        def color_for(name, k): return colors.get(
+            name, default_cycle[k % len(default_cycle)])
+    elif isinstance(colors, (list, tuple)):
+        def color_for(name, k): return colors[k % len(colors)]
+    else:
+        def color_for(name, k): return default_cycle[k % len(default_cycle)]
+
+    # Setup figure/axes
+    fig_height = max(4, 1.8 * n_states)
+    fig, axes = plt.subplots(
+        n_states, 1, figsize=(7.2, fig_height), sharex=True)
+    if n_states == 1:
+        axes = [axes]
+
+    # Title
+    gt_label = "NL (truth: noisy)" if compare_to == "SimData" else "NL (truth: clean)"
+    fig.suptitle(f"{system_name}: {title_suffix} [{split.capitalize()}]")
+
+    # Plot per state
+    for s in range(n_states):
+        ax = axes[s]
+
+        # Ground truth
+        gt = GT[sim_offset + idx, s, :N]
+        ax.plot(time, gt.cpu().numpy(), linestyle="--", linewidth=1.3,
+                color="black", alpha=0.75, label=gt_label)
+
+        # Overlay all models
+        for k, model in enumerate(models):
+            name = model.get("name", f"Model {k+1}")
+            pack = model[split]
+            Xhat = pack["Xhat"][idx, s, :N]
+
+            col = color_for(name, k)
+            ax.plot(time, Xhat.cpu().numpy(),
+                    label=name, linewidth=1.6, color=col)
+
+            # Optional uncertainty band if available
+            Xcvhat = pack.get("Xcvhat", None)
+            if Xcvhat is not None:
+                # take diag element (state s) variance over time
+                var_s = Xcvhat[idx, s, s, :N]
+                # clamp small negatives due to numerical issues
+                std_s = torch.sqrt(torch.clamp(var_s, min=0.0))
+                lower = (Xhat - sigma * std_s).cpu().numpy()
+                upper = (Xhat + sigma * std_s).cpu().numpy()
+                ax.fill_between(time, lower, upper, alpha=0.16, color=col)
+
+        ax.set_ylabel(f"X{s+1}")
+        ax.grid(True, linestyle=":", linewidth=0.7)
+
+    axes[-1].set_xlabel("Time [s]")
+
+    # One shared legend
+    # Build a clean legend across axes: collect handles/labels from the last axis
+    handles, labels = axes[-1].get_legend_handles_labels()
+    # Deduplicate while preserving order
+    seen = set()
+    uniq = [(h, l) for h, l in zip(handles, labels)
+            if not (l in seen or seen.add(l))]
+    if uniq:
+        fig.legend(*zip(*uniq), loc="upper right", bbox_to_anchor=(0.98, 0.98))
+
+    fig.tight_layout(rect=[0, 0, 0.98, 0.96])
+    # plt.show()
+    return fig, axes
+
+
 def plot_time_series_with_bounds(time, Xhat, Xcvhat, SimData, idx, N, system_name, title_suffix, sim_offset=0):
     """
     Plots time series for each state with uncertainty bounds.
