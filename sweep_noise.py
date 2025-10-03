@@ -2,10 +2,10 @@
 import itertools
 from acc26_script import run_models_for_noise
 
-SYSTEM_NAME = "Simple Pendulum"   # change as needed
+SYSTEM_NAME = "Lorenz"   # change as needed
 TRAIN_FRAC = 0.40
 TEST_FRAC = 0.20
-CLIP = 100                 # or None
+CLIP = 120                 # or None
 
 NOISE_TYPES = [
     "gaussian",
@@ -15,13 +15,17 @@ NOISE_TYPES = [
     "linear_uniform",
 ]
 
-INTENSITIES = [0.00, 0.02, 0.05, 0.10, 0.20]  # normalized scale
-SEEDS = [100, 101]                      # repeatability / variability
+INTENSITIES = [0., 0.02, 0.05, 0.10]  # normalized scale
+SEEDS = [100]                      # repeatability / variability
 
-OUTDIR = "Figures"
+OUTDIR = "Figures_Noise-Sweep_" + SYSTEM_NAME
 
 for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, SEEDS):
+    if intensity == 0.0 and noise_type != "gaussian":
+        continue   # skip duplicates at zero noise
+
     print(f"\n=== {noise_type} | intensity={intensity:.3f} | seed={seed} ===")
+    
     run_models_for_noise(
         system_name=SYSTEM_NAME,
         train_frac=TRAIN_FRAC,
@@ -31,9 +35,9 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         intensity=intensity,
         seed=seed,
         # (tweak model knobs if desired)
-        lifted_order=10,
+        lifted_order=30,
         iters_list=(2000, 50, 50, 100),
-        learn_rate=0.04,
+        learn_rate=0.03,
         opt_weights=(10.0, 1.0, 10.0),
         routine="Z_only",
         train_method="Horizon",

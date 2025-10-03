@@ -41,7 +41,9 @@ def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=None):
     if seed is not None:
         torch.manual_seed(seed)
 
-    if noise_type == "gaussian":
+    if noise_type == None:
+        noise = 0
+    elif noise_type == "gaussian":
         noise = torch.randn_like(SimData_norm) * intensity
     elif noise_type == "uniform":
         # Uniform noise in [-intensity, intensity]
@@ -405,12 +407,12 @@ def run_models_for_noise(
     # 4) eDMDs
     t0 = time.perf_counter()
     A_poly, C_poly, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
-        SimData, nTrain, nTest, poly_deg=3)
+        SimData, nTrain, nTest, poly_deg=6)
     t_poly = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     A_rbf, C_rbf, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf = gpk.eDMD_RBF_kmeans(
-        SimData, nTrain, nTest, num_centers=10, width=0.2, rbf_type='thin_plate', state_aug=True)
+        SimData, nTrain, nTest, num_centers=lifted_order, width=0.2, rbf_type='thin_plate', state_aug=True)
     t_rbf = time.perf_counter() - t0
 
     # 5) indices + timebase
