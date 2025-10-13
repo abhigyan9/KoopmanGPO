@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from sklearn.cluster import KMeans
+from .autonomous import sim_LTI
 
 # Plotting Functions
 
@@ -620,7 +621,7 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
                 i, ICset[:, j].view(n, 1))
 
         # 2) Propagate with linear model
-        Zmean[j], Zcv[j], Xhat[j], Xcv[j] = gpk.sim_LTI(
+        Zmean[j], Zcv[j], Xhat[j], Xcv[j] = sim_LTI(
             Zmean[j, :, 0].view(p, 1), A, C, num_steps=N, ts=None, x0cv=Zcv[j, :, :, 0]
         )
 
