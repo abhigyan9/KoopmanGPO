@@ -25,3 +25,4 @@ from .utilities import sim_and_eval
 # import eDMD functions
 from .traditional import generate_basis, generate_basis_batch, eDMD_poly
 from .traditional import rbf_observable, eDMD_RBF_kmeans
+from .traditional import SSID, get_ssidgpk

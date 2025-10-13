@@ -419,7 +419,7 @@ def run_models_for_noise(
     t0 = time.perf_counter()
     results_ssid = gpk.get_ssidgpk(
         SimData=SimData,
-        nTrain=nTrain, nTest=nTrain,
+        nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
         delay=N - 1)
     t_ssid = time.perf_counter() - t0
@@ -495,8 +495,8 @@ if __name__ == "__main__":
     # Optional: a single manual call for quick test
     run_models_for_noise(
         system_name="Simple Pendulum",
-        train_frac=0.2, test_frac=0.2, clip=100,
-        noise_type="linear_gaussian", intensity=0.10, seed=100,
+        train_frac=0.3, test_frac=0.2, clip=150,
+        noise_type="linear_gaussian", intensity=0.0, seed=100,
         outdir="Figures_Trial"
     )
 

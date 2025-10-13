@@ -11,7 +11,7 @@ NOISE_TYPES = [
     "gaussian"
 ]
 
-INTENSITIES = [0.]  # normalized scale
+INTENSITIES = [0., 0.05, 0.1]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
 OUTDIR = "Figures_Noise-Sweep_" + SYSTEM_NAME
