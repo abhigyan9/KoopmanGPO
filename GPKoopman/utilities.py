@@ -510,6 +510,45 @@ def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
         # plt.show()
 
 
+def plot_eigen(A):  # Eigen value plot of Koopman Matrices
+    A = A.detach().cpu()
+    eigval = torch.linalg.eigvals(A)
+
+    eigreal, eigimag = eigval.real, eigval.imag
+    eigreal, eigimag = eigreal.detach().numpy(), eigimag.detach().numpy()
+    eig_mag = np.sqrt(eigreal**2 + eigimag**2)
+
+    theta = np.linspace(0, 2*np.pi, 500)
+    unitCirclex, unitCircley = np.cos(theta), np.sin(theta)
+
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    # First subplot: Eigenvalues plot
+    axes[0].plot(unitCirclex, unitCircley, color='orange', label='Unit Circle')
+    for i in range(np.size(eig_mag)):
+        if eig_mag[i] <= 1:
+            axes[0].scatter(eigreal, eigimag, color='green',
+                            label='Eigenvalues')
+        else:
+            axes[0].scatter(eigreal, eigimag, color='red', label='Eigenvalues')
+
+    axes[0].axhline(0, color='black', linewidth=0.5, linestyle='--')
+    axes[0].axvline(0, color='black', linewidth=0.5, linestyle='--')
+    axes[0].set_title(f"Eigenvalues of A Matrix with {A.shape[0]} Observables")
+    axes[0].set_xlabel("Real Part")
+    axes[0].set_ylabel("Imaginary Part")
+    axes[0].grid(True)
+    axes[0].legend(labels=['Unit Circle', 'Eignevalues'], loc='upper right')
+
+    # Second subplot: Heatmap of matrix A
+    im = axes[1].imshow(A.detach().numpy(), cmap='viridis', aspect='auto')
+    fig.colorbar(im, ax=axes[1], label="Value")
+    axes[1].set_title(f'{A.shape[0]}-D Koopman Matrix')
+    axes[1].set_xlabel("Columns")
+    axes[1].set_ylabel("Rows")
+    plt.tight_layout()
+    return fig
+
+
 # K-Means Clusting helper function
 
 def get_kmeans(data, num_centers=1):
@@ -542,3 +581,58 @@ def get_kmeans(data, num_centers=1):
     centroids = torch.from_numpy(centroids_np.T).float()
 
     return centroids
+
+
+# Simulation Tools
+
+def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
+    """
+    Simulate from Koopman (A, C) for each IC in ICset and compute per-trajectory NRMSE.
+    Returns (Xhat, Xcvhat, NRMSE).
+
+    Args:
+        ObsManager: trained GPObservablesManager
+        A, C: Koopman matrices (CPU or GPU OK; function will move to CPU to simulate)
+        ICset: (n, nTraj) tensor of initial conditions for this split (train or test)
+        SimData_ref: normalized (or chosen reference) data, shape (num_traj, n, N+1)
+        traj_offset: index offset into SimData_ref for this split
+    """
+    A, C = A.to(device='cpu'), C.to(device='cpu')
+    ICset = ICset.to(device='cpu')
+    SimData_ref = SimData_ref.to(device='cpu')
+
+    nTraj = ICset.shape[1]
+    n = C.shape[0]
+    N = SimData_ref.shape[2] - 1
+    p = A.shape[0]
+
+    Zmean = torch.empty((nTraj, p, N), dtype=ICset.dtype, device=ICset.device)
+    Zcv = torch.empty((nTraj, p, p, N), dtype=ICset.dtype, device=ICset.device)
+    Xhat = torch.empty((nTraj, n, N), dtype=ICset.dtype, device=ICset.device)
+    Xcv = torch.empty((nTraj, n, n, N), dtype=ICset.dtype, device=ICset.device)
+    NRMSE = torch.empty((nTraj, n), dtype=ICset.dtype, device=ICset.device)
+
+    for j in range(nTraj):
+        # 1) Predict initial lifted state distribution from IC
+        for i in range(p):
+            Zmean[j, i, 0] = ObsManager.predict_mean(i, ICset[:, j].view(n, 1))
+            Zcv[j, i, i, 0] = ObsManager.predict_covariance(
+                i, ICset[:, j].view(n, 1))
+
+        # 2) Propagate with linear model
+        Zmean[j], Zcv[j], Xhat[j], Xcv[j] = gpk.sim_LTI(
+            Zmean[j, :, 0].view(p, 1), A, C, num_steps=N, ts=None, x0cv=Zcv[j, :, :, 0]
+        )
+
+        # 3) NRMSE against reference (per-trajectory range)
+        y_true = SimData_ref[traj_offset + j, :, :N]  # (n, N)
+        errors = Xhat[j] - y_true
+        rmse = torch.sqrt(torch.mean(errors**2, dim=1))                 # (n,)
+        y_max = y_true.max(dim=1).values
+        y_min = y_true.min(dim=1).values
+        y_range = torch.where((y_max - y_min) == 0,
+                              torch.ones_like(y_max),
+                              (y_max - y_min))
+        NRMSE[j] = rmse / y_range
+
+    return Xhat.detach(), Xcv.detach(), NRMSE.detach()

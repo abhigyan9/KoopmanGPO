@@ -18,8 +18,9 @@ from .GPObs import GPObservable, GPObservablesManager
 
 # import utility functions
 from .utilities import plot_phase, plot_phase_w_bounds, plot_time_series_with_bounds, plot_predicted_sd_error, compare_model_predictions
-from .utilities import check_pd, MatViz3d, MatViz
+from .utilities import check_pd, MatViz3d, MatViz, plot_eigen
 from .utilities import get_kmeans
+from .utilities import sim_and_eval
 
 # import eDMD functions
 from .traditional import generate_basis, generate_basis_batch, eDMD_poly

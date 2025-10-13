@@ -398,7 +398,7 @@ def run_models_for_noise(
 
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
-    ICsetTrain, ICsetTest = results["ICsetTrain"], results["ICsetTest"]
+    # ICsetTrain, ICsetTest = results["ICsetTrain"], results["ICsetTest"]
     XhatTrain, XcvhatTrain, TrainNRMSE = results["Train"][
         "Xhat"], results["Train"]["Xcv"], results["Train"]["NRMSE"]
     XhatTest,  XcvhatTest,  TestNRMSE = results["Test"][
@@ -415,14 +415,31 @@ def run_models_for_noise(
         SimData, nTrain, nTest, num_centers=lifted_order, width=0.2, rbf_type='thin_plate', state_aug=True)
     t_rbf = time.perf_counter() - t0
 
-    # 5) indices + timebase
+    # 5) SSID-GPK
+    t0 = time.perf_counter()
+    results_ssid = gpk.get_ssidgpk(
+        SimData=SimData,
+        nTrain=nTrain, nTest=nTrain,
+        lifting_order=lifted_order,
+        delay=N - 1)
+    t_ssid = time.perf_counter() - t0
+
+    # unpack SSID-GPK results
+    A_ssid, C_ssid = results_ssid["A"], results_ssid["C"]
+    # ICsetTrain_ssid, ICsetTest_ssid = results["ICsetTrain"], results["ICsetTest"]
+    XhatTrain_ssid, XcvhatTrain_ssid, TrainNRMSE_ssid = results_ssid["Train"][
+        "Xhat"], results_ssid["Train"]["Xcv"], results_ssid["Train"]["NRMSE"]
+    XhatTest_ssid,  XcvhatTest_ssid,  TestNRMSE_ssid = results_ssid["Test"][
+        "Xhat"],  results_ssid["Test"]["Xcv"],  results_ssid["Test"]["NRMSE"]
+
+    # 6) indices + timebase
     idx_trainMIN = torch.argmin(TrainNRMSE.mean(dim=1))
     idx_testMIN = torch.argmin(TestNRMSE.mean(dim=1))
     idx_testMAX = torch.argmax(TestNRMSE.mean(dim=1))
     # same shape you used (see your callsite) :contentReference[oaicite:11]{index=11}
     time_arr = torch.arange(0., ts * (SimData.shape[2] - 1), ts)
 
-    # 6) pack models for overlay plot
+    # 7) pack models for overlay plot
     models = [
         {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
             "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}},
@@ -430,9 +447,11 @@ def run_models_for_noise(
             "test": {"Xhat": XhatTest_poly}},
         {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
             "test": {"Xhat": XhatTest_rbf}},
+        {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid, "Xcvhat": XcvhatTrain_ssid},
+            "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid}}
     ]
 
-    # 7) make & save all figures
+    # 8) make & save all figures
     stamp = datetime.now().strftime("%Y%m%d")
     tag = f"{system_name.replace(' ', '_')}_noise-{noise_type}_int-{intensity:.3f}_seed-{seed}_{stamp}"
 
@@ -456,16 +475,16 @@ def run_models_for_noise(
 
     # c) NRMSE comparison
     fig_nrmse = plot_NRMSE_metrics(
-        [TrainNRMSE, TrainNRMSE_poly, TrainNRMSE_rbf],
-        [TestNRMSE,  TestNRMSE_poly,  TestNRMSE_rbf],
-        ["iGPK", "Poly-eDMD", "RBF-eDMD"]
+        [TrainNRMSE, TrainNRMSE_poly, TrainNRMSE_rbf, TrainNRMSE_ssid],
+        [TestNRMSE,  TestNRMSE_poly,  TestNRMSE_rbf, TestNRMSE_ssid],
+        ["iGPK", "Poly-eDMD", "RBF-eDMD", "SSID-GPK"]
     )
     _save(fig_nrmse, outdir, f"{tag}_NRMSE_compare")
 
-    # 8) small return bundle (optional)
+    # 9) small return bundle (optional)
     return {
-        "timings": {"iGPK": t_iGPK, "Poly-eDMD": t_poly, "RBF-eDMD": t_rbf},
-        "orders":  {"iGPK": C_igpk.shape[1], "Poly-eDMD": C_poly.shape[1], "RBF-eDMD": C_rbf.shape[1]},
+        "timings": {"iGPK": t_iGPK, "Poly-eDMD": t_poly, "RBF-eDMD": t_rbf, "SSID-GPK": t_ssid},
+        "orders":  {"iGPK": C_igpk.shape[1], "Poly-eDMD": C_poly.shape[1], "RBF-eDMD": C_rbf.shape[1], "SSID-GPK": C_ssid.shape[1]},
         "splits":  {"nTrain": nTrain, "nTest": nTest},
         "tag": tag,
         "outdir": outdir
@@ -476,9 +495,9 @@ if __name__ == "__main__":
     # Optional: a single manual call for quick test
     run_models_for_noise(
         system_name="Simple Pendulum",
-        train_frac=0.4, test_frac=0.2, clip=100,
+        train_frac=0.2, test_frac=0.2, clip=100,
         noise_type="linear_gaussian", intensity=0.10, seed=100,
-        outdir="Figures"
+        outdir="Figures_Trial"
     )
 
 

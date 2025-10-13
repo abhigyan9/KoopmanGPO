@@ -126,8 +126,8 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
     # Expect x0cv to be a tensor of shape (n,n)
     m, n = C.shape  # n = number of states, m = number of outputs
 
-    x = torch.zeros((n, num_steps))
-    y = torch.zeros((m, num_steps))
+    x = torch.zeros((n, num_steps), dtype=x0.dtype, device=x0.device)
+    y = torch.zeros((m, num_steps), dtype=x0.dtype, device=x0.device)
 
     if x0.dim() == 1:
         x[:, 0] = x0
@@ -155,8 +155,8 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
         if x0cv.shape[0] is not n or x0cv.shape[1] is not n:
             raise ValueError('Expected x0cv to be a 2D tensor of shape (n,n)')
 
-        xcv = torch.zeros((n, n, num_steps))
-        ycv = torch.zeros((m, m, num_steps))
+        xcv = torch.zeros((n, n, num_steps), dtype=x0.dtype, device=x0.device)
+        ycv = torch.zeros((m, m, num_steps), dtype=x0.dtype, device=x0.device)
         xcv[:, :, 0] = x0cv
 
         for k in range(num_steps - 1):
