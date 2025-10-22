@@ -21,6 +21,7 @@ from .utilities import plot_phase, plot_phase_w_bounds, plot_time_series_with_bo
 from .utilities import check_pd, MatViz3d, MatViz, plot_eigen
 from .utilities import get_kmeans
 from .utilities import sim_and_eval
+from .utilities import load_SimData, normalize_data, add_noise
 
 # import eDMD functions
 from .traditional import generate_basis, generate_basis_batch, eDMD_poly

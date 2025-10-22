@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 from matplotlib.patches import Ellipse
 from sklearn.cluster import KMeans
 from .autonomous import sim_LTI
@@ -155,6 +156,66 @@ def compare_model_predictions(
     fig.tight_layout(rect=[0, 0, 0.98, 0.96])
     # plt.show()
     return fig, axes
+
+
+def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
+    """
+    Compare Train/Test NRMSE across multiple models.
+
+    Args:
+        TrainNRMSE_list (list of torch.Tensor): Each tensor has shape (nTraj, nStates).
+        TestNRMSE_list  (list of torch.Tensor): Each tensor has shape (nTraj, nStates).
+        model_names     (list of str): Names of the models, used as plot labels.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    axes = axes.flatten()
+
+    # --- Training set (per trajectory curves) ---
+    for train_rmse, name in zip(TrainNRMSE_list, model_names):
+        mean_nrmse = train_rmse.mean(dim=1)   # average across states
+        axes[0].plot(
+            range(train_rmse.shape[0]),
+            mean_nrmse.numpy(),
+            marker='o', linestyle='-', label=name
+        )
+    axes[0].set_title('Training Metrics (Per Trajectory)')
+    axes[0].set_xlabel("Trajectory Index")
+    axes[0].set_ylabel("Mean NRMSE")
+    axes[0].legend()
+    axes[0].grid()
+
+    # --- Test set (per trajectory curves) ---
+    for test_rmse, name in zip(TestNRMSE_list, model_names):
+        mean_nrmse = test_rmse.mean(dim=1)   # average across states
+        axes[1].plot(
+            range(test_rmse.shape[0]),
+            mean_nrmse.numpy(),
+            marker='o', linestyle='-', label=name
+        )
+    axes[1].set_title('Test Metrics (Per Trajectory)')
+    axes[1].set_xlabel("Trajectory Index")
+    axes[1].set_ylabel("Mean NRMSE")
+    axes[1].legend()
+    axes[1].grid()
+
+    # --- Training set (bar chart: overall average) ---
+    overall_train = [rmse.mean().item() for rmse in TrainNRMSE_list]
+    axes[2].bar(np.arange(len(model_names)),
+                overall_train, tick_label=model_names)
+    axes[2].set_title("Training Metrics (Overall Mean)")
+    axes[2].set_ylabel("Mean NRMSE")
+    axes[2].grid(axis="y")
+
+    # --- Test set (bar chart: overall average) ---
+    overall_test = [rmse.mean().item() for rmse in TestNRMSE_list]
+    axes[3].bar(np.arange(len(model_names)),
+                overall_test, tick_label=model_names)
+    axes[3].set_title("Test Metrics (Overall Mean)")
+    axes[3].set_ylabel("Mean NRMSE")
+    axes[3].grid(axis="y")
+
+    plt.tight_layout()
+    return fig
 
 
 def plot_time_series_with_bounds(time, Xhat, Xcvhat, SimData, idx, N, system_name, title_suffix, sim_offset=0):
@@ -637,3 +698,79 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
         NRMSE[j] = rmse / y_range
 
     return Xhat.detach(), Xcv.detach(), NRMSE.detach()
+
+
+# Data Pre-Processing Tools
+
+
+def load_SimData(system_name, trainFrac, testFrac, clip=None):
+    data = torch.load(f"Data/DataAuto_{system_name}.pt", weights_only=True)
+    # Shape: (num_trajectories, state_dim, num_steps)
+    SimData = data["trajectories"]
+    ts = data["sample_time"]
+    num_trajectories, N = data["num_trajectories"], data["num_steps"]
+
+    nTrain, nTest = math.floor(
+        num_trajectories * trainFrac), math.floor(num_trajectories * testFrac)
+    if clip is not None:
+        SimData = SimData[:, :, :clip+1]
+        N = clip
+
+    return SimData, ts, num_trajectories, N, nTrain, nTest
+
+
+def normalize_data(SimData_raw, nTrain, N):
+    # Compute normalization stats over training split only
+    # SimData shape: (num_traj, state_dim, num_steps)
+    mu_vec = SimData_raw[:nTrain, :, :N].mean(
+        dim=(0, 2))                                # (n,)
+    std_vec = SimData_raw[:nTrain, :, :N].std(
+        dim=(0, 2), unbiased=False).clamp_min(1e-8)  # (n,)
+
+    # Apply normalization to ALL trajectories (train+test); keep everything on CPU for now
+    SimData = (SimData_raw - mu_vec.view(1, -1, 1)) / std_vec.view(1, -1, 1)
+    return SimData, mu_vec, std_vec
+
+
+def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=None):
+    """
+    Add noise to normalized simulation data.
+
+    Args:
+        SimData_norm (torch.Tensor): Normalized trajectories,
+            shape (num_traj, state_dim, num_steps).
+        noise_type (str): 'gaussian' or 'uniform'.
+        intensity (float): Noise strength (default 0.05 = 5% of 1 std).
+                          Since data is normalized, this is relative to std=1.
+        seed (int, optional): Random seed for reproducibility.
+
+    Returns:
+        torch.Tensor: Noisy version of SimData_norm.
+    """
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    if noise_type == None:
+        noise = 0
+    elif noise_type == "gaussian":
+        noise = torch.randn_like(SimData_norm) * intensity
+    elif noise_type == "uniform":
+        # Uniform noise in [-intensity, intensity]
+        noise = (torch.rand_like(SimData_norm) * 2 - 1) * intensity
+    elif noise_type == "linear_gaussian":
+        # Gaussian noise with intensity varying linearly with state value
+        var_intensity = intensity * SimData_norm
+        noise = torch.randn_like(SimData_norm) * var_intensity
+    elif noise_type == "quadratic_gaussian":
+        # Gaussian noise with intensity varying as square of state value
+        var_intensity = intensity * (SimData_norm ** 2)
+        noise = torch.randn_like(SimData_norm) * var_intensity
+    elif noise_type == "linear_uniform":
+        # Uniform noise with linearly varying intensity
+        var_intensity = intensity * SimData_norm
+        noise = (torch.rand_like(SimData_norm) * 2 - 1) * var_intensity
+    else:
+        raise ValueError(
+            f"Unsupported noise_type {noise_type}. Choose 'gaussian', 'uniform', 'linear_gaussian', 'quadratic_gaussian', or 'linear_uniform'.")
+
+    return SimData_norm + noise
