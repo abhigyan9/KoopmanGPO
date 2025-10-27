@@ -76,6 +76,12 @@ def df_PWL(x, params=None):
     return torch.tensor([xp0], dtype=torch.float64)
 
 
+# def df_VDP_Surana2016(x, params=None):
+#     if params is None:
+#         params = torch.tensor([0.31, 0.94, -3., 0.32], dtype=torch.float64)
+#     xp0 = x[0] - x[1] *
+
+
 def sim_RK4(fx, x0, ts, num_steps, params=None):
     n = x0.shape[0]
     states = torch.zeros((n, num_steps), dtype=torch.float64)
