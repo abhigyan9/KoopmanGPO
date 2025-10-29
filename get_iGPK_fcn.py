@@ -3,7 +3,6 @@ import GPKoopman as gpk
 import torch
 import matplotlib.pyplot as plt
 import time
-from botorch.models import SingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
@@ -11,7 +10,52 @@ from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikeliho
 from botorch.acquisition import qLogExpectedImprovement
 from botorch.sampling import SobolQMCNormalSampler
 from botorch.optim import optimize_acqf
-from torch.quasirandom import SobolEngine
+
+from botorch.models import SingleTaskGP
+from botorch.acquisition import qLogNoisyExpectedImprovement
+from gpytorch.kernels import ScaleKernel, MaternKernel
+from gpytorch.priors import GammaPrior, LogNormalPrior
+
+
+# ---- Build a rough, noisy surrogate ----
+def build_rough_noisy_gp(train_X, train_Y):
+    """
+    BO surrogate GP favoring roughness and nonzero noise:
+      - Matérn-1/2 (absolute exponential) with ARD
+      - Priors nudging lengthscales small (rougher)
+      - LogNormal prior on outputscale
+      - Learn noise (SingleTaskGP) with a weak prior favoring nonzero noise
+    Assumes train_X normalized outside (we also apply Normalize transform).
+    """
+    d = train_X.shape[-1]
+
+    # Matérn kernel with ARD and informative priors
+    base_kern = MaternKernel(
+        nu=1.5,                 # roughest Matérn (try 1.5 if too spiky)
+        ard_num_dims=d,
+        lengthscale_prior=GammaPrior(concentration=2.0, rate=10.0)  # mean=0.2 in [0,1] space
+    )
+    covar = ScaleKernel(
+        base_kern,
+        outputscale_prior=LogNormalPrior(loc=-1.0, scale=0.5)       # favors smaller outputscale but flexible
+    )
+
+    # SingleTaskGP will create a GaussianLikelihood with learnable noise.
+    # Give the noise a prior that avoids collapsing to ~0 in noisy settings.
+    model = SingleTaskGP(
+        train_X, train_Y,
+        covar_module=covar,
+        input_transform=Normalize(d=d),
+        outcome_transform=Standardize(m=1),
+    )
+    # Optional: set a weak log-normal prior on noise (keeps it away from 0)
+    model.likelihood.noise_covar.register_prior(
+        "noise_prior",
+        LogNormalPrior(loc=-4.0, scale=1.0),   # median ~ exp(-4) ≈ 0.018 (tune)
+        "noise"
+    )
+    return model
+
 
 ## --- COST FUNCTION --- ##
 
@@ -775,18 +819,21 @@ def _bo_optimize_Z_and_hp(
             if yi < best_so_far:
                 best_so_far = yi
                 best_x = xi.clone()
-            cost_hist.append(best_so_far)
+            # cost_hist.append(best_so_far)
 
     train_X = X_init                               # [N, dTot], double
     train_Y = torch.cat(Y_list, dim=0)             # [N, 1], double
 
     # 2) BO loop
     for iter_num in range(n_iter):
-        gp = SingleTaskGP(
-            train_X, train_Y,
-            input_transform=Normalize(dTot),
-            outcome_transform=Standardize(m=1),
-        )
+        # gp = SingleTaskGP(
+        #     train_X, train_Y,
+        #     input_transform=Normalize(dTot),
+        #     outcome_transform=Standardize(m=1),
+        # )
+        # mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+        # fit_gpytorch_mll(mll)
+        gp = build_rough_noisy_gp(train_X, train_Y)
         mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
         fit_gpytorch_mll(mll)
 
@@ -796,8 +843,9 @@ def _bo_optimize_Z_and_hp(
         except TypeError:
             sampler = SobolQMCNormalSampler(sample_shape=torch.Size([256]))
 
-        acqf = qLogExpectedImprovement(
-            model=gp, best_f=train_Y.min(), sampler=sampler)
+        # acqf = qLogExpectedImprovement(
+        #     model=gp, best_f=train_Y.min(), sampler=sampler)
+        acqf = qLogNoisyExpectedImprovement(model=gp, X_baseline=train_X)
 
         # Optimize acqf; fallback to Sobol if SciPy fails
         try:
@@ -1188,7 +1236,7 @@ if __name__ == "__main__":
     lifted_order = 6
     noise_type = 'gaussian'
     iters_list = [0, 10, 10, 200]
-    routine = "BO_hp_and_GD_Z" # BO_Z | BO_ZnHP | BO_hp_and_GD_Z
+    routine = "BO_ZnHP" # BO_Z | BO_ZnHP | BO_hp_and_GD_Z
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
