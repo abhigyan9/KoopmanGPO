@@ -45,6 +45,10 @@ if __name__ == "__main__":
     plot_trajectories("van der Pol", x_idx1=0, x_idx2=1,
                       title="van der Pol Oscillator")
 
+    # Reverse van der Pol Oscillator
+    plot_trajectories("Reverse van der Pol", x_idx1=0, x_idx2=1,
+                      title="Reverse van der Pol Oscillator")
+    
     # Plot Simple Damped Pendulum phase plot and inputs (x[0] vs x[1])
     plot_trajectories("Simple Pendulum", x_idx1=0, x_idx2=1,
                       title="Simple Damped Pendulum")

@@ -23,6 +23,15 @@ def f_VDP(x, params=None):
     return torch.tensor([dx0, dx1], dtype=torch.float64)
 
 
+def f_RVDP(x, params=None):
+    # Common param names = mu
+    if params is None:
+        params = torch.tensor([1.])
+    dx0 = -x[1]
+    dx1 = x[0] - x[1] + ( (x[0] ** 2) * x[1] )
+    return torch.tensor([dx0, dx1], dtype=torch.float64)
+
+
 def f_SDP(x, params=None):
     # Common param names = length, damping coefficient
     if params is None:

@@ -16,6 +16,60 @@ from torch.quasirandom import SobolEngine
 ## --- COST FUNCTION --- ##
 
 
+def get_cost_simple(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda3=1.0):
+    """
+    Computes the cost function using a single differentiable GP forward pass per observable,
+    merging the training and prediction steps by passing Z[:, i] directly to the forward method.
+
+    Args:
+        Z: Tensor of shape (nT*l, p), decision variable (requires grad).
+        X: Tensor of shape (n, nT*N), dataset of N steps per trajectory.
+        Xplus: Tensor of shape (n, nT*N), time-shifted dataset.
+        Xtrain: Tensor of shape (n, r**n), gridpoints for training.
+        manager: GPObservablesManager.
+        nT: Number of trajectories.
+        lambda1: Weighting for multi-variate NLPD
+        lambda2: Weighting for Lifting Accuracy (Bhattacharyya Distance)
+        lambda3: Weighting for Reconstruction
+    """
+    N = X.shape[1] // nT    # Number of time steps per trajectory
+    p = Z.shape[1]          # Number of observables
+    l = Z.shape[0] // nT    # Decision horizon
+    # n = X.shape[0]          # State dimension
+
+    # For each observable, call forward once on the full dataset X (and Xplus)
+    M = torch.empty((p, N * nT), device=X.device)
+    Mplus = torch.empty((p, N * nT), device=X.device)
+    # diag_all = torch.empty((p, N * nT), device=X.device)
+    # diag_all_plus = torch.empty((p, N * nT), device=X.device)
+    # cov_all_plus = [None] * p  # store full covariance matrices for Xplus
+
+    for i in range(p):
+        mean_i, _ = manager.observables[i].forward(X, Z[:, i])
+        M[i, :] = torch.transpose(mean_i, 0, -1)
+        # diag_all[i] = torch.clamp(torch.diagonal(cov_i), min=1e-3)
+
+        mean_plus_i, _ = manager.observables[i].forward(
+            Xplus, Z[:, i])
+        Mplus[i, :] = torch.transpose(mean_plus_i, 0, -1)
+        # diag_all_plus[i] = torch.clamp(torch.diagonal(cov_i_plus), min=1e-3)
+
+    # Compute the pseudo-inverse lifting operator and the corresponding matrices Cz and Az.
+    
+    try:
+        L = torch.linalg.cholesky(M @ M.mT)
+        M_pinv = torch.cholesky_solve(M.mT, L)
+    except RuntimeError:
+        M_pinv = torch.linalg.pinv(M)
+    
+    M_pinvM = M_pinv @ M
+    
+    cost1 = torch.linalg.matrix_norm(Mplus - (Mplus @ M_pinvM))
+    cost2 = torch.linalg.matrix_norm(X - (X @ M_pinvM))
+
+    return (lambda1 * cost1) + (lambda2 * cost2)
+
+
 def get_cost_ACnew2(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda3=1.0):
     """
     Computes the cost function using a single differentiable GP forward pass per observable,
@@ -287,7 +341,7 @@ def _mgr_unpack_and_set_params(ObsManager, flat_vec32, spec):
     )
 
 
-def _mgr_build_hp_bounds(ObsManager, X, default_hp1=(1e-4, 10.0), default_hp2=(1e-3, 10.0),
+def _mgr_build_hp_bounds(ObsManager, X, default_hp1=(1e-4, 2.0), default_hp2=(1e-4, 2.0),
                          default_noise=(1e-8, 1e-1), mu_margin=0.1):
     """
     Builds [2, dh] bounds aligned to the flat parameter vector produced by _mgr_pack_params_flat.
@@ -409,7 +463,7 @@ def _bo_optimize_Z(
     train_Y = torch.cat(Y_list, dim=0)             # [N, 1], double
 
     # 2) BO loop with qEI
-    for _ in range(n_iter):
+    for iter_num in range(n_iter):
         # Fit GP with scaling transforms (helps SciPy and numerics)
         gp = SingleTaskGP(
             train_X, train_Y,
@@ -469,7 +523,8 @@ def _bo_optimize_Z(
                     best_x = cand[j].detach().clone()
                 cost_hist.append(best_so_far)
             Y_new = torch.cat(Y_new, dim=0)  # [q,1], double
-
+        
+        print(f'BO Iteration {iter_num} completed with minimum cost = {Y_new.min()}')
         # Augment data (double)
         train_X = torch.cat([train_X, cand], dim=0)
         train_Y = torch.cat([train_Y, Y_new], dim=0)
@@ -550,7 +605,7 @@ def _bo_hp_outer_gdZ_inner(
         with torch.enable_grad():
             for _ in range(inner_steps):
                 optZ.zero_grad(set_to_none=True)
-                cost = get_cost_ACnew2(
+                cost = get_cost_simple(
                     Z, X, Xplus, ObsManager,
                     nT=nT, lambda1=lam1, lambda2=lam2, lambda3=lam3
                 )
@@ -591,7 +646,7 @@ def _bo_hp_outer_gdZ_inner(
             Y0_vals.append(yi)
 
     # Iterations
-    for _ in range(n_outer_iter):
+    for inner_iter in range(n_outer_iter):
         gp = SingleTaskGP(
             train_X, train_Y,
             input_transform=Normalize(d=dh),
@@ -634,6 +689,8 @@ def _bo_hp_outer_gdZ_inner(
                     z_warm = best_Z.detach().clone()
 
             cost_trace.append(best_val)
+        
+        print(f'Finished BO Iteration {inner_iter} with Min Loss {cost_trace[-1]:.2e}')
 
     eval_costs = torch.tensor(cost_trace, device=device)
     per_iter_idx = [((i+1)*q_batch - 1) for i in range(n_outer_iter + 1)]
@@ -724,7 +781,7 @@ def _bo_optimize_Z_and_hp(
     train_Y = torch.cat(Y_list, dim=0)             # [N, 1], double
 
     # 2) BO loop
-    for _ in range(n_iter):
+    for iter_num in range(n_iter):
         gp = SingleTaskGP(
             train_X, train_Y,
             input_transform=Normalize(dTot),
@@ -786,11 +843,18 @@ def _bo_optimize_Z_and_hp(
 
         train_X = torch.cat([train_X, cand], dim=0)
         train_Y = torch.cat([train_Y, Y_new], dim=0)
+        print(f'Finished BO Iteration {iter_num} with cost {best_so_far}')
 
     # Unpack best
     Z_best32 = best_x[:dZ].to(dtype=torch.float32).view(*Z_shape)
     hp_best32 = best_x[dZ:].to(dtype=torch.float32).view(-1)
-    return Z_best32, hp_best32, cost_hist
+
+    eval_costs = torch.tensor(cost_hist, device=device)
+    per_iter_idx = [((i+1)*q - 1) for i in range(n_iter + 1)]
+    per_iter_best = eval_costs[per_iter_idx].detach().cpu().tolist()
+
+    return Z_best32, hp_best32, {"cost": eval_costs, "per_iter_best": per_iter_best,
+                                                     "n_outer": n_iter, "q_batch": q}
 
 
 def get_iGPK(
@@ -1018,7 +1082,7 @@ def get_iGPK(
         Z = torch.nn.Parameter(Z_opt32.detach().clone())
         _mgr_unpack_and_set_params(
             ObsManager, hp_opt32.detach().clone(), hp_spec)
-        cost_history = bo_hist
+        cost_history = bo_hist["per_iter_best"]
 
     elif routine == "BO_hp_and_GD_Z":
         # Configure: iters_list = [_, n_outer_iter, q_batch, inner_steps]
@@ -1119,12 +1183,12 @@ def get_iGPK(
 
 if __name__ == "__main__":
     system_name = 'Simple Pendulum'
-    train_frac, test_frac = 0.3, 0.2
-    clip = 100
-    lifted_order = 10
+    train_frac, test_frac = 0.4, 0.2
+    clip = None
+    lifted_order = 6
     noise_type = 'gaussian'
-    iters_list = [0, 5, 5, 50]
-    routine = "BO_hp_and_GD_Z"
+    iters_list = [0, 10, 10, 200]
+    routine = "BO_hp_and_GD_Z" # BO_Z | BO_ZnHP | BO_hp_and_GD_Z
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
@@ -1138,13 +1202,14 @@ if __name__ == "__main__":
     print(f'==== Starting iGPK Model Identification ====')
     t0 = time.perf_counter()
     results = get_iGPK(SimData, nTrain, nTest, lifted_order,
-                       iters_list, learn_rate=0.01,
-                       opt_weights=[0., 2.0, 1.0], routine=routine,
+                       iters_list, learn_rate=0.05,
+                       opt_weights=[1.0, 1.0, 1.0], routine=routine,
                        train_method="Horizon")
     t_BO = time.perf_counter() - t0
     print(
-        f'Bayesian Optimization with {iters_list[1]}-samples, {iters_list[2]}-iterations, finished in {t_BO:.2f} seconds.')
-    # plt.show()
+        f'Bayesian Optimization with {iters_list[1]}-iterations, {iters_list[2]}-samples, finished in {t_BO:.2f} seconds.')
+
+
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
     # ICsetTrain, ICsetTest = results["ICsetTrain"], results["ICsetTest"]
@@ -1154,8 +1219,8 @@ if __name__ == "__main__":
         "Xhat"],  results["Test"]["Xcv"],  results["Test"]["NRMSE"]
 
     gpk.plot_eigen(A_igpk)
-    # plt.show()
-    gpk.plot_NRMSE_metrics([TrainNRMSE], [TestNRMSE], ['iGPK-BO'])
+
+    gpk.plot_NRMSE_metrics([TrainNRMSE*100], [TestNRMSE*100], ['iGPK-BO'])
 
     # 6) indices + timebase
     idx_trainMIN = torch.argmin(TrainNRMSE.mean(dim=1))
