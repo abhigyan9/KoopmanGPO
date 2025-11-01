@@ -579,68 +579,55 @@ def _bo_optimize_Z(
 
 
 def _bo_hp_outer_gdZ_inner(
-    # torch.Tensor, shape (l*nTrain, p), float32 on device
-    Z_init,
-    ObsManager,                   # GPObservablesManager
-    X, Xplus, nT,                 # training tensors
-    # [2, dh] double, from _mgr_build_hp_bounds(...)
-    hp_bounds_mat,
-    lam1, lam2, lam3,             # weights for get_cost_ACnew2
+    Z_init,                        # (l*nTrain, p) float32 on device
+    ObsManager, X, Xplus, nT,
+    hp_bounds_mat,                # [2, dh] (double)
+    lam1, lam2, lam3,
     device,
-    n_outer_iter=10,              # ← 10 iterations
-    q_batch=20,                   # ← 20 samples per iteration
-    inner_steps=200,              # ← 200 GD steps on Z
+    n_outer_iter=10,
+    q_batch=20,
+    inner_steps=200,
     lr_Z=0.02,
     seed=1234,
-    warm_start=True
+    warm_start=True,
 ):
     """
-    Bayesian Optimization over flattened hyperparameters (hp) with a nested
-    inner loop: for each hp candidate, run gradient descent on Z for 'inner_steps'
-    and use the minimum get_cost_ACnew2 reached as the objective value.
-
+    BO over hyperparameters (hp) with inner GD on Z for each hp candidate.
+    Uses qLogNEI (noisy) and a rough Matérn GP surrogate.
     Returns: best_Z32, best_hp32, history dict
     """
     torch.manual_seed(seed)
-    dZ = Z_init.shape[0] * Z_init.shape[1]
-    # 1) Flatten current hp and prepare bounds
+
+    # --- Flatten current hp & bounds
     hp0_flat32, hp_spec = _mgr_pack_params_flat(ObsManager)
     if hp0_flat32.numel() == 0:
         raise ValueError("No hyperparameters in ObsManager.")
-    assert hp_bounds_mat.shape == (
-        2, hp0_flat32.numel()), "hp_bounds_mat must be [2, dh]"
 
     dh = hp0_flat32.numel()
+    if hp_bounds_mat.shape != (2, dh):
+        raise ValueError("hp_bounds_mat must be [2, dh].")
+
     bounds_d = hp_bounds_mat.to(device=device, dtype=torch.double)
     lb_hp, ub_hp = bounds_d[0], bounds_d[1]
 
-    # -- storage for BO train data (double for BoTorch)
+    # --- BO storage (double)
     train_X = torch.empty(0, dh, dtype=torch.double, device=device)
     train_Y = torch.empty(0, 1,  dtype=torch.double, device=device)
 
     best_val = float("inf")
-    best_hp = None
-    best_Z = None
-    cost_trace = []
+    best_hp  = None
+    best_Z   = None
+    cost_trace = []         # best-so-far after every evaluation
+    per_iter_best = []      # one value per BO iteration (incl. init as iter 0)
 
-    # Warm-start template for Z per candidate
-    # Z_template = Z_init.detach().clone()
-
+    # ----- Inner evaluator: hp -> run inner GD on Z, return min cost & Z
     def eval_candidate_hp(x_hp_double, z0):
-        """
-        x_hp_double: [dh] double tensor on device
-        Steps:
-          1) set hp in manager
-          2) inner GD on Z for 'inner_steps' (starting from Z_template)
-          3) return min cost reached, and best Z found for that hp
-        """
-        # 1) set hp
+        # 1) set hp in manager
         hp32 = x_hp_double.to(dtype=torch.float32)
         _mgr_unpack_and_set_params(ObsManager, hp32, hp_spec)
 
-        # 2) inner GD on Z
+        # 2) run inner GD on Z (warm-start)
         Z = torch.nn.Parameter(z0.detach().clone())
-        # optZ = torch.optim.SGD([Z], lr=lr_Z, momentum=0.75, nesterov=True)
         optZ = torch.optim.Adam([Z], lr=lr_Z)
 
         best_inner = float("inf")
@@ -663,95 +650,115 @@ def _bo_hp_outer_gdZ_inner(
 
         return best_inner, best_Z_inner
 
-    # ===== BO loop =====
-    # Initial design via Sobol: evaluate q_batch points
+    # ===== Initial (Sobol) batch: q_batch evals =====
     sobol = torch.quasirandom.SobolEngine(dh, scramble=True, seed=seed)
-    X0u = sobol.draw(q_batch).to(
-        device=device, dtype=torch.double)  # [q_batch, dh] in [0,1]
-    X0 = lb_hp + (ub_hp - lb_hp) * X0u
-    with torch.no_grad():
-        Y0_vals = []
-        z_warm = Z_init.detach().clone()  # seed warm start
-        for i in range(q_batch):
-            z0 = (best_Z if (warm_start and best_Z is not None)
-                  else z_warm) if warm_start else Z_init
-            yi, Zi = eval_candidate_hp(X0[i], z0)
-            train_X = torch.cat([train_X, X0[i:i+1]], dim=0)
-            train_Y = torch.cat([train_Y, torch.tensor(
-                [[yi]], dtype=torch.double, device=device)], dim=0)
+    X0u   = sobol.draw(q_batch).to(device=device, dtype=torch.double)  # [q_batch, dh] in [0,1]
+    X0    = lb_hp + (ub_hp - lb_hp) * X0u
+    X0    = X0.clamp(lb_hp, ub_hp)
 
-            # global best tracking
-            if yi < best_val:
-                best_val, best_hp, best_Z = yi, X0[i].detach(
-                ).clone(), Zi.detach().clone()
-                if warm_start:  # promote global best to new warm start
-                    z_warm = best_Z.detach().clone()
-            cost_trace.append(best_val)
-            Y0_vals.append(yi)
+    z_warm = Z_init.detach().clone()  # initial warm start for Z
+    for i in range(q_batch):
+        z0 = (best_Z if (warm_start and best_Z is not None) else z_warm) if warm_start else Z_init
+        yi, Zi = eval_candidate_hp(X0[i], z0)
 
-    # Iterations
-    for inner_iter in range(n_outer_iter):
-        gp = SingleTaskGP(
-            train_X, train_Y,
-            input_transform=Normalize(d=dh),
-            outcome_transform=Standardize(m=1),
-        )
+        train_X = torch.cat([train_X, X0[i:i+1]], dim=0)
+        train_Y = torch.cat([train_Y, torch.tensor([[yi]], dtype=torch.double, device=device)], dim=0)
+
+        if yi < best_val:
+            best_val, best_hp, best_Z = yi, X0[i].detach().clone(), Zi.detach().clone()
+            if warm_start:
+                z_warm = best_Z.detach().clone()
+
+        cost_trace.append(best_val)
+
+    # record per-iteration best after init batch (iteration 0)
+    per_iter_best.append(best_val)
+    print(f"[BO 0/init] best={best_val:.3e}")
+
+    # ===== BO iterations =====
+    for it in range(1, n_outer_iter + 1):
+        # Rough, noise-aware surrogate (Matérn + ARD + noise prior)
+        gp = build_rough_noisy_gp(train_X, train_Y)  # uses Normalize/Standardize inside
         mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
         fit_gpytorch_mll(mll)
 
-        try:
-            sampler = SobolQMCNormalSampler(num_samples=256)
-        except TypeError:
-            sampler = SobolQMCNormalSampler(sample_shape=torch.Size([256]))
+        sampler = SobolQMCNormalSampler(sample_shape=torch.Size([256]))
 
-        acq = qLogExpectedImprovement(
-            model=gp, best_f=train_Y.min(), sampler=sampler)
+        acq = qLogNoisyExpectedImprovement(
+            model=gp,
+            X_baseline=train_X,       # noisy baseline
+            sampler=sampler,
+            prune_baseline=True,
+            cache_root=True,
+        )
 
+        # Optimize acquisition to get q_batch new hp candidates
         cand, _ = optimize_acqf(
             acq_function=acq,
             bounds=bounds_d,
             q=q_batch,
-            num_restarts=15,
-            raw_samples=512,
-            options={"batch_limit": 5, "maxiter": 200},
+            num_restarts=20,
+            raw_samples=1024,
+            options={"batch_limit": 5, "maxiter": 300},
         )
         cand = cand.clamp(lb_hp, ub_hp)
 
+        # Evaluate each candidate with inner Z-GD
         for j in range(q_batch):
-            z0 = (best_Z if (warm_start and best_Z is not None)
-                  else z_warm) if warm_start else Z_init
+            z0 = (best_Z if (warm_start and best_Z is not None) else z_warm) if warm_start else Z_init
             yj, Zj = eval_candidate_hp(cand[j], z0)
 
             train_X = torch.cat([train_X, cand[j:j+1]], dim=0)
-            train_Y = torch.cat([train_Y, torch.tensor(
-                [[yj]], dtype=torch.double, device=device)], dim=0)
+            train_Y = torch.cat([train_Y, torch.tensor([[yj]], dtype=torch.double, device=device)], dim=0)
 
             if yj < best_val:
-                best_val, best_hp, best_Z = yj, cand[j].detach(
-                ).clone(), Zj.detach().clone()
+                best_val, best_hp, best_Z = yj, cand[j].detach().clone(), Zj.detach().clone()
                 if warm_start:
                     z_warm = best_Z.detach().clone()
 
             cost_trace.append(best_val)
-        
-        print(f'Finished BO Iteration {inner_iter} with Min Loss {cost_trace[-1]:.2e}')
+
+        # per-iteration best = last best-so-far appended in this iteration
+        per_iter_best.append(best_val)
+        print(f"[BO {it}] best={best_val:.3e}")
+
+        # ---- Early stopping: if initial batch > 10 and 5-iter improvement < 5% ----
+        # Here, "n_init" (initial designs) == q_batch
+        if n_outer_iter > 10 and len(per_iter_best) >= 6:
+            prev5 = per_iter_best[-6]  # value 5 iterations ago
+            curr  = per_iter_best[-1]
+            # relative improvement guard
+            if prev5 > 0:
+                rel_impr = (prev5 - curr) / prev5
+            else:
+                rel_impr = 0.0 if abs(prev5 - curr) < 1e-8 else float('inf')
+
+            if rel_impr < 0.05:
+                print(f"[Early stop] 5-iter relative improvement {rel_impr:.3%} < 5%. Stopping.")
+                break
 
     eval_costs = torch.tensor(cost_trace, device=device)
-    per_iter_idx = [((i+1)*q_batch - 1) for i in range(n_outer_iter + 1)]
-    per_iter_best = eval_costs[per_iter_idx].detach().cpu().tolist()
+    # robust per-iteration compaction (init + each BO iter)
+    # each "iteration chunk" has q_batch evals; pick last best from each chunk
+    per_iter_idx = [((i+1)*q_batch - 1) for i in range(len(per_iter_best))]
+    per_iter_best_out = [per_iter_best[i] for i in range(len(per_iter_best))]
 
-    return best_Z, best_hp.to(dtype=torch.float32), {"cost": eval_costs, "per_iter_best": per_iter_best,
-                                                     "n_outer": n_outer_iter, "q_batch": q_batch}
+    history = {
+        "cost": eval_costs,
+        "per_iter_best": per_iter_best_out,
+        "n_outer": len(per_iter_best) - 1,  # actual BO iters run (excl. init)
+        "q_batch": q_batch,
+    }
+    return best_Z, best_hp.to(dtype=torch.float32), history
 
 
 def _bo_optimize_Z_and_hp(
     Z_shape,                      # tuple: (l*nTrain, p)
     eval_cost_fn,                 # callable: (Z32, hp32) -> scalar tensor()
-    # callables: get_hp() -> hp32 [dh], set_hp(hp32)
-    get_hp, set_hp,
+    get_hp, set_hp,               # getters/setters: flat 1-D hp32
     device,
-    Z_bounds=(0.0, 1.0),          # tuple for all Z dims
-    hp_bounds_mat=None,           # [2, dh] per-dimension bounds for hp
+    Z_bounds=(0.0, 1.0),
+    hp_bounds_mat=None,           # [2, dh], torch.double on any device
     n_init: int = 32,
     n_iter: int = 128,
     q: int = 1,
@@ -759,150 +766,141 @@ def _bo_optimize_Z_and_hp(
 ):
     """
     Joint BO over flattened Z and hp. BoTorch runs in float64; cost in float32.
+
     Returns
     -------
-    Z_best32 : Z tensor with shape Z_shape (float32)
+    Z_best32 : tensor with shape Z_shape (float32)
     hp_best32: flat hp tensor (float32)
-    cost_hist: list[float]
+    history  : dict with 'per_iter_best' (one value per BO iter incl. iter 0 = init),
+               'best_so_far', and 'stopped_early' flag
     """
     torch.manual_seed(seed)
-    dZ = Z_shape[0] * Z_shape[1]
-    hp0_32 = get_hp()
-    assert hp0_32.dim() == 1, "hp getter must return a flat 1-D tensor"
-    dh = hp0_32.numel()
+    dZ  = Z_shape[0] * Z_shape[1]
+    hp0 = get_hp()
+    assert hp0.dim() == 1, "get_hp() must return a flat 1-D tensor"
+    dh  = hp0.numel()
 
-    # Build per-dim bounds [2, dZ+dh] in double
+    if hp_bounds_mat is None or hp_bounds_mat.shape != (2, dh):
+        raise ValueError("hp_bounds_mat must be provided with shape [2, dh].")
+
+    # Build [2, dTot] bounds in double on target device
     lbZ, ubZ = map(float, Z_bounds)
-    bounds_list_lb = [lbZ] * dZ
-    bounds_list_ub = [ubZ] * dZ
-
-    if hp_bounds_mat is None:
-        raise ValueError("hp_bounds_mat [2, dh] required for BO_Z_and_hp")
-
-    assert hp_bounds_mat.shape == (2, dh), "hp_bounds_mat must be [2, dh]"
-    lb_hp = hp_bounds_mat[0].tolist()
-    ub_hp = hp_bounds_mat[1].tolist()
-
-    bounds_lb = torch.tensor(bounds_list_lb + lb_hp,
-                             dtype=torch.double, device=device)
-    bounds_ub = torch.tensor(bounds_list_ub + ub_hp,
-                             dtype=torch.double, device=device)
-    bounds_d = torch.stack([bounds_lb, bounds_ub], dim=0)  # [2, dTot]
+    bounds_lb = torch.tensor([lbZ] * dZ, dtype=torch.double, device=device)
+    bounds_ub = torch.tensor([ubZ] * dZ, dtype=torch.double, device=device)
+    lb_hp = hp_bounds_mat[0].to(dtype=torch.double, device=device)
+    ub_hp = hp_bounds_mat[1].to(dtype=torch.double, device=device)
+    bounds_lb = torch.cat([bounds_lb, lb_hp], dim=0)              # [dTot]
+    bounds_ub = torch.cat([bounds_ub, ub_hp], dim=0)              # [dTot]
+    bounds_d  = torch.stack([bounds_lb, bounds_ub], dim=0)        # [2, dTot]
     dTot = dZ + dh
 
-    # 1) Sobol init within bounds
-    sobol = torch.quasirandom.SobolEngine(
-        dimension=dTot, scramble=True, seed=seed)
-    # [n_init, dTot] in [0,1]
-    U = sobol.draw(n_init).to(device=device, dtype=torch.double)
+    # 1) Sobol initialization within bounds
+    sobol = torch.quasirandom.SobolEngine(dimension=dTot, scramble=True, seed=seed)
+    U = sobol.draw(n_init).to(device=device, dtype=torch.double)          # [n_init, dTot] in [0,1]
     X_init = bounds_lb + (bounds_ub - bounds_lb) * U
     X_init = X_init.clamp(bounds_lb, bounds_ub)
 
-    # Evaluate initial design
+    # Evaluate initial design (no gradients needed here)
     Y_list = []
     best_so_far = float('inf')
     best_x = None
-    cost_hist = []
+    for i in range(n_init):
+        xi = X_init[i]
+        Z_part32  = xi[:dZ].to(dtype=torch.float32).view(*Z_shape)
+        hp_part32 = xi[dZ:].to(dtype=torch.float32).view(-1)
+        set_hp(hp_part32)
+        y = eval_cost_fn(Z_part32, hp_part32)                 # scalar float32 tensor
+        yi = float(y.item())
+        Y_list.append(y.detach().to(dtype=torch.double).view(1, 1))
+        if yi < best_so_far:
+            best_so_far = yi
+            best_x = xi.clone()
 
-    with torch.no_grad():
-        for i in range(n_init):
-            xi = X_init[i]
-            Z_part32 = xi[:dZ].to(dtype=torch.float32).view(*Z_shape)
-            hp_part32 = xi[dZ:].to(dtype=torch.float32).view(-1)
+    train_X = X_init
+    train_Y = torch.cat(Y_list, dim=0)                         # [n_init, 1] double
 
-            # set hp in ObsManager (float32)
-            set_hp(hp_part32)
-            y = eval_cost_fn(Z_part32, hp_part32)  # returns float32 scalar
-            y_d = y.detach().to(dtype=torch.double).view(1, 1)
-            Y_list.append(y_d)
-            yi = float(y.item())
-            if yi < best_so_far:
-                best_so_far = yi
-                best_x = xi.clone()
-            # cost_hist.append(best_so_far)
-
-    train_X = X_init                               # [N, dTot], double
-    train_Y = torch.cat(Y_list, dim=0)             # [N, 1], double
+    # Track one value per BO iteration (include iteration 0 = after init)
+    per_iter_best = [best_so_far]
+    stopped_early = False
 
     # 2) BO loop
-    for iter_num in range(n_iter):
-        # gp = SingleTaskGP(
-        #     train_X, train_Y,
-        #     input_transform=Normalize(dTot),
-        #     outcome_transform=Standardize(m=1),
-        # )
-        # mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-        # fit_gpytorch_mll(mll)
+    for iter_num in range(1, n_iter + 1):
+        # Build a rough, noise-aware surrogate (you defined this elsewhere)
         gp = build_rough_noisy_gp(train_X, train_Y)
         mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
         fit_gpytorch_mll(mll)
 
-        # Sampler (API compatibility)
-        try:
-            sampler = SobolQMCNormalSampler(num_samples=256)
-        except TypeError:
-            sampler = SobolQMCNormalSampler(sample_shape=torch.Size([256]))
-
-        # acqf = qLogExpectedImprovement(
-        #     model=gp, best_f=train_Y.min(), sampler=sampler)
+        # qNEI for noisy objective; baseline = all observed designs
         acqf = qLogNoisyExpectedImprovement(model=gp, X_baseline=train_X)
 
-        # Optimize acqf; fallback to Sobol if SciPy fails
+        # Optimize acquisition; fallback to random if optimizer fails
         try:
             cand, _ = optimize_acqf(
                 acq_function=acqf,
                 bounds=bounds_d,
                 q=q,
-                num_restarts=15,
-                raw_samples=512,
-                options={"batch_limit": 5, "maxiter": 200},
+                num_restarts=20,
+                raw_samples=1024,
+                options={"batch_limit": 5, "maxiter": 300},
             )
         except Exception:
-            rand_cands = torch.quasirandom.SobolEngine(
-                dTot, scramble=True, seed=seed+9).draw(256)
-            rand_cands = bounds_lb + \
-                (bounds_ub - bounds_lb) * \
-                rand_cands.to(device=device, dtype=torch.double)
-            rand_cands = rand_cands.clamp(bounds_lb, bounds_ub)
-            with torch.no_grad():
-                acq_vals = acqf(rand_cands.unsqueeze(-2))  # [256,1]
+            rand = torch.quasirandom.SobolEngine(dTot, scramble=True, seed=seed + 9).draw(256)
+            rand = bounds_lb + (bounds_ub - bounds_lb) * rand.to(device=device, dtype=torch.double)
+            rand = rand.clamp(bounds_lb, bounds_ub)
+            # Evaluate acq on shape [N, q=1, d]
+            acq_vals = acqf(rand.unsqueeze(-2))                # [256, 1]
             top_idx = torch.topk(acq_vals.view(-1), k=q).indices
-            cand = rand_cands[top_idx]                     # [q, dTot]
+            cand = rand[top_idx]                                # [q, dTot]
 
         cand = cand.clamp(bounds_lb, bounds_ub)
 
-        with torch.no_grad():
-            Y_new = []
-            for j in range(q):
-                xj = cand[j]
-                Z_part32 = xj[:dZ].to(dtype=torch.float32).view(*Z_shape)
-                hp_part32 = xj[dZ:].to(dtype=torch.float32).view(-1)
-                set_hp(hp_part32)
-                y = eval_cost_fn(Z_part32, hp_part32).detach().view(
-                    1, 1)   # float32
-                y_d = y.to(dtype=torch.double)
-                Y_new.append(y_d)
-                yi = float(y.item())
-                if yi < best_so_far:
-                    best_so_far = yi
-                    best_x = xj.detach().clone()
-                cost_hist.append(best_so_far)
-            Y_new = torch.cat(Y_new, dim=0)
+        # Evaluate candidates and update datasets
+        Y_new = []
+        for j in range(q):
+            xj = cand[j]
+            Z_part32  = xj[:dZ].to(dtype=torch.float32).view(*Z_shape)
+            hp_part32 = xj[dZ:].to(dtype=torch.float32).view(-1)
+            set_hp(hp_part32)
+            y = eval_cost_fn(Z_part32, hp_part32).detach().to(dtype=torch.double).view(1, 1)
+            Y_new.append(y)
+            yi = float(y.item())
+            if yi < best_so_far:
+                best_so_far = yi
+                best_x = xj.detach().clone()
 
+        Y_new = torch.cat(Y_new, dim=0)
         train_X = torch.cat([train_X, cand], dim=0)
         train_Y = torch.cat([train_Y, Y_new], dim=0)
-        print(f'Finished BO Iteration {iter_num} with cost {best_so_far}')
 
-    # Unpack best
-    Z_best32 = best_x[:dZ].to(dtype=torch.float32).view(*Z_shape)
+        # Record per-iteration best (one value per BO iteration)
+        per_iter_best.append(best_so_far)
+        print(f"Finished BO Iteration {iter_num} with cost {best_so_far}")
+
+        # ---- Early stopping: if n_init > 10 and 5-iter improvement < 5% ----
+        if n_init > 10 and len(per_iter_best) >= 6:
+            prev5 = per_iter_best[-6]      # best value 5 iterations ago
+            curr  = per_iter_best[-1]
+            if prev5 > 0:                  # define relative improvement safely
+                rel_impr = (prev5 - curr) / prev5
+            else:
+                # if prev5 <= 0, use absolute threshold (treat as no improvement if tiny change)
+                rel_impr = 0.0 if abs(prev5 - curr) < 1e-8 else float('inf')
+            if rel_impr < 0.05:            # < 5% improvement over last 5 iterations
+                stopped_early = True
+                break
+
+    # Unpack the best design into return tensors
+    Z_best32  = best_x[:dZ].to(dtype=torch.float32).view(*Z_shape)
     hp_best32 = best_x[dZ:].to(dtype=torch.float32).view(-1)
 
-    eval_costs = torch.tensor(cost_hist, device=device)
-    per_iter_idx = [((i+1)*q - 1) for i in range(n_iter + 1)]
-    per_iter_best = eval_costs[per_iter_idx].detach().cpu().tolist()
-
-    return Z_best32, hp_best32, {"cost": eval_costs, "per_iter_best": per_iter_best,
-                                                     "n_outer": n_iter, "q_batch": q}
+    history = {
+        "per_iter_best": per_iter_best,     # one value per iteration incl. init
+        "best_so_far": best_so_far,
+        "stopped_early": stopped_early,
+        "n_init": n_init,
+        "n_iter_ran": len(per_iter_best) - 1,  # iterations after init actually run
+    }
+    return Z_best32, hp_best32, history
 
 
 def get_iGPK(
@@ -1094,7 +1092,7 @@ def get_iGPK(
         # Build a joint objective that evaluates cost at (Z, hp)
         def _eval_cost_at_Zhp(Z_current, _hp_unused):
             # hp is already set in the manager by the BO loop before calling this
-            return get_cost_ACnew2(
+            return get_cost_simple(
                 Z_current, X, Xplus, ObsManager,
                 nT=nTrain, lambda1=lam1, lambda2=lam2, lambda3=lam3
             )
@@ -1134,11 +1132,11 @@ def get_iGPK(
 
     elif routine == "BO_hp_and_GD_Z":
         # Configure: iters_list = [_, n_outer_iter, q_batch, inner_steps]
-        n_outer_iter = iters_list[1] if len(
-            iters_list) > 1 else 10    # default 10
-        q_batch = iters_list[2] if len(iters_list) > 2 else 20    # default 20
+        q_batch = iters_list[1] if len(
+            iters_list) > 1 else 20    # default 10
+        n_outer_iter = iters_list[2] if len(iters_list) > 2 else 10    # default 20
         inner_steps = iters_list[3] if len(
-            iters_list) > 3 else 200   # default 200
+            iters_list) > 3 else 100   # default 200
 
         # Build hp bounds from current manager + data-driven μ bounds
         hp0_flat32, hp_spec = _mgr_pack_params_flat(ObsManager)
@@ -1230,13 +1228,13 @@ def get_iGPK(
 
 
 if __name__ == "__main__":
-    system_name = 'Simple Pendulum'
+    system_name = 'Cart_data'
     train_frac, test_frac = 0.4, 0.2
     clip = None
-    lifted_order = 6
+    lifted_order = 20
     noise_type = 'gaussian'
-    iters_list = [0, 10, 10, 200]
-    routine = "BO_ZnHP" # BO_Z | BO_ZnHP | BO_hp_and_GD_Z
+    iters_list = [0, 8, 20, 100]   # unused, samples, iterations, inner iterations
+    routine = "BO_hp_and_GD_Z" # BO_Z | BO_ZnHP | BO_hp_and_GD_Z
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
@@ -1250,7 +1248,7 @@ if __name__ == "__main__":
     print(f'==== Starting iGPK Model Identification ====')
     t0 = time.perf_counter()
     results = get_iGPK(SimData, nTrain, nTest, lifted_order,
-                       iters_list, learn_rate=0.05,
+                       iters_list, learn_rate=0.04,
                        opt_weights=[1.0, 1.0, 1.0], routine=routine,
                        train_method="Horizon")
     t_BO = time.perf_counter() - t0
@@ -1279,8 +1277,8 @@ if __name__ == "__main__":
 
     # 7) pack models for overlay plot
     models = [
-        {"name": "iGPK-BO", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
-            "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}}
+        {"name": "iGPK-BO", "train": {"Xhat": XhatTrain},
+            "test": {"Xhat": XhatTest}}
     ]
 
     # a) 3 trajectory overlays

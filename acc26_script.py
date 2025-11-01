@@ -299,9 +299,17 @@ def compare_model_predictions(
         ax = axes[s]
 
         # Ground truth
-        gt = GT[sim_offset + idx, s, :N]
-        ax.plot(time, gt.cpu().numpy(), linestyle="--", linewidth=1.3,
-                color="black", alpha=0.75, label=gt_label)
+        gt = GT[sim_offset + idx, s, :N].cpu().numpy()
+        # choose about 20 evenly spaced marker points
+        n_markers = 20
+        marker_idx = np.linspace(0, N - 1, n_markers, dtype=int)
+
+        ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black", alpha=0.75,
+            label=gt_label)
+
+        # overlay sparse markers for clarity
+        ax.plot(time[marker_idx], gt[marker_idx], marker='o', linestyle='None',
+            color="black", markersize=4, alpha=0.8, label=None)
 
         # Overlay all models
         for k, model in enumerate(models):
@@ -374,9 +382,9 @@ def run_models_for_noise(
     SimData_raw, ts, num_traj, N, nTrain, nTest = load_SimData(
         # :contentReference[oaicite:9]{index=9}
         system_name, train_frac, test_frac, clip=clip)
-    SimData_clean, mu_vec, std_vec = normalize_data(
-        SimData_raw, nTrain, N)  # :contentReference[oaicite:10]{index=10}
-
+    # SimData_clean, mu_vec, std_vec = normalize_data(
+    #     SimData_raw, nTrain, N)  # :contentReference[oaicite:10]{index=10}
+    SimData_clean = SimData_raw
     # 2) Noise
     SimData = add_noise(SimData_clean, noise_type=noise_type,
                         intensity=intensity, seed=seed)
@@ -407,7 +415,7 @@ def run_models_for_noise(
     # 4) eDMDs
     t0 = time.perf_counter()
     A_poly, C_poly, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
-        SimData, nTrain, nTest, poly_deg=6)
+        SimData, nTrain, nTest, poly_deg=3)
     t_poly = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -451,6 +459,17 @@ def run_models_for_noise(
             "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid}}
     ]
 
+    models_nocv = [
+        {"name": "iGPK", "train": {"Xhat": XhatTrain},
+            "test": {"Xhat": XhatTest}},
+        {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
+            "test": {"Xhat": XhatTest_poly}},
+        {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
+            "test": {"Xhat": XhatTest_rbf}},
+        {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
+            "test": {"Xhat": XhatTest_ssid}}
+    ]
+
     # 8) make & save all figures
     stamp = datetime.now().strftime("%Y%m%d")
     tag = f"{system_name.replace(' ', '_')}_noise-{noise_type}_int-{intensity:.3f}_seed-{seed}_{stamp}"
@@ -468,6 +487,14 @@ def run_models_for_noise(
             compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0
         )
         _save(fig, outdir, f"{tag}_timeseries_{which}")
+
+        fig, _ = compare_model_predictions(
+            time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
+                SimData.shape[2]-1),
+            system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+            compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0
+        )
+        _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
     # b) Eigen (iGPK)
     fig_eig = plot_eigen(A_igpk)

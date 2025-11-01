@@ -2,16 +2,16 @@
 import itertools
 from acc26_script import run_models_for_noise
 
-SYSTEM_NAME = "Reverse van der Pol"   # change as needed
-TRAIN_FRAC = 0.40
-TEST_FRAC = 0.20
+SYSTEM_NAME = "Reciprocal-Biased Damped Pendulum"   # change as needed
+TRAIN_FRAC = 0.30
+TEST_FRAC = 0.2
 CLIP = None                 # or None
 
 NOISE_TYPES = [
-    "gaussian"
+    "gaussian", "uniform"
 ]
 
-INTENSITIES = [0., 0.02, 0.05]  # normalized scale
+INTENSITIES = [0., 0.05, 0.1]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
 OUTDIR = "Figures_Noise-Sweep_" + SYSTEM_NAME
@@ -31,11 +31,11 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         intensity=intensity,
         seed=seed,
         # (tweak model knobs if desired)
-        lifted_order=20,
-        iters_list=(0, 128, 64, 150),
+        lifted_order=10,
+        iters_list=(0, 20, 32, 150),
         learn_rate=0.04,
-        opt_weights=(1.0, 1.0, 10.0),
-        routine="BO_ZnHP",
+        opt_weights=(1.0, 1.0, 1.0),
+        routine="BO_hp_and_GD_Z",
         train_method="Horizon",
         device="cuda:0",
         outdir=OUTDIR

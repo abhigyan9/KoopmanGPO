@@ -1,6 +1,37 @@
 # models and equations
 import torch
 
+def f_RR(x, params=None):
+    # Common param names = alpha, beta, eps
+    if params is None:
+        params = torch.tensor([1.0, 1.0, 1e-3], dtype=torch.float64)
+    alpha, beta, eps = params
+    dx = -alpha * x[0] + beta / (eps + x[0] ** 2)
+    return torch.tensor([dx], dtype=torch.float64)
+
+
+def f_RBDP(x, params=None):
+    # Common param names = kappa, omega, a
+    if params is None:
+        params = torch.tensor([0.1, 1.0, 0.5], dtype=torch.float64)
+    kappa, omega, a = params
+    dx0 = x[1]
+    dx1 = -kappa * x[1] - (omega ** 2) * torch.sin(x[0]) + a / (1.0 + x[0] ** 2)
+    return torch.tensor([dx0, dx1], dtype=torch.float64)
+
+
+def f_IPP(x, params=None):
+    # Common param names = r, K, a, h, n, eta, d
+    if params is None:
+        params = torch.tensor([1.0, 5.0, 1.0, 1.0, 2.0, 0.5, 0.3], dtype=torch.float64)
+    r, K, a, h, n, eta, d = params
+    prey, pred = x[0], x[1]
+    denom = 1.0 + h * prey ** n
+    interaction = (a * prey ** 2 / denom) * pred
+    dx0 = r * prey * (1.0 - prey / K) - interaction
+    dx1 = eta * interaction - d * pred
+    return torch.tensor([dx0, dx1], dtype=torch.float64)
+
 
 def f_UDO(x, params=None):
     # Common param names = alpha, beta, delta
@@ -83,6 +114,11 @@ def df_PWL(x, params=None):
     else:
         xp0 = params[1] * (x[0] - params[3]) + params[0]
     return torch.tensor([xp0], dtype=torch.float64)
+
+
+def df_scalarNL(x, params=None):
+    x0p = -x[0] + (3 / ( 1 + (x[0] ** 2))) + (0.5 * torch.sin(2 * x[0]))
+    return torch.tensor([x0p], dtype=torch.float64)
 
 
 # def df_VDP_Surana2016(x, params=None):

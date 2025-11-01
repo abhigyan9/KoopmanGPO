@@ -37,22 +37,34 @@ def plot_trajectories(system_name, x_idx1, x_idx2, title):
 
 
 if __name__ == "__main__":
-    # Plot Duffing Oscillator phase plot and inputs (x[0] vs x[1])
-    plot_trajectories("Unforced Duffing", x_idx1=0, x_idx2=1,
-                      title="Unforced Duffing Oscillator")
+    # # Plot Duffing Oscillator phase plot and inputs (x[0] vs x[1])
+    # plot_trajectories("Unforced Duffing", x_idx1=0, x_idx2=1,
+    #                   title="Unforced Duffing Oscillator")
 
-    # van der Pol Oscillator
-    plot_trajectories("van der Pol", x_idx1=0, x_idx2=1,
-                      title="van der Pol Oscillator")
+    # # van der Pol Oscillator
+    # plot_trajectories("van der Pol", x_idx1=0, x_idx2=1,
+    #                   title="van der Pol Oscillator")
 
-    # Reverse van der Pol Oscillator
-    plot_trajectories("Reverse van der Pol", x_idx1=0, x_idx2=1,
-                      title="Reverse van der Pol Oscillator")
+    # # Reverse van der Pol Oscillator
+    # plot_trajectories("Reverse van der Pol", x_idx1=0, x_idx2=1,
+    #                   title="Reverse van der Pol Oscillator")
     
-    # Plot Simple Damped Pendulum phase plot and inputs (x[0] vs x[1])
-    plot_trajectories("Simple Pendulum", x_idx1=0, x_idx2=1,
-                      title="Simple Damped Pendulum")
+    # # Plot Simple Damped Pendulum phase plot and inputs (x[0] vs x[1])
+    # plot_trajectories("Simple Pendulum", x_idx1=0, x_idx2=1,
+    #                   title="Simple Damped Pendulum")
 
-    # Plot Lotka Volterra phase plot and inputs (x[0] vs x[2])
-    plot_trajectories("Lotka Volterra", x_idx1=0, x_idx2=1,
-                      title="Lotka Volterra Dynamics")
+    # # Plot Lotka Volterra phase plot and inputs (x[0] vs x[2])
+    # plot_trajectories("Lotka Volterra", x_idx1=0, x_idx2=1,
+    #                   title="Lotka Volterra Dynamics")
+
+    plot_trajectories("Cart_data", x_idx1=0, x_idx2=2,
+                      title="Unforced PoC")
+    
+    # plot_trajectories("Reciprocal Relaxer", x_idx1=0, x_idx2=1,
+    #                   title="Reciprocal Relaxer")
+    
+    plot_trajectories("Reciprocal-Biased Damped Pendulum", x_idx1=0, x_idx2=1,
+                      title="Reciprocal Biased Damped Pendulum")
+    
+    plot_trajectories("Inhibited Predator-Prey", x_idx1=0, x_idx2=1,
+                      title="Predator-Prey with inhibited predation")
