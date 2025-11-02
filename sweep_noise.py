@@ -2,7 +2,7 @@
 import itertools
 from acc26_script import run_models_for_noise
 
-SYSTEM_NAME = "Reciprocal-Biased Damped Pendulum"   # change as needed
+SYSTEM_NAME = "Inhibited Predator-Prey"   # change as needed
 TRAIN_FRAC = 0.30
 TEST_FRAC = 0.2
 CLIP = None                 # or None

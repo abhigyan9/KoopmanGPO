@@ -98,9 +98,9 @@ def compare_model_predictions(
         def color_for(name, k): return default_cycle[k % len(default_cycle)]
 
     # Setup figure/axes
-    fig_height = max(4, 1.8 * n_states)
+    fig_height = max(5, 1.8 * n_states)
     fig, axes = plt.subplots(
-        n_states, 1, figsize=(7.2, fig_height), sharex=True)
+        n_states, 1, figsize=(6, fig_height), sharex=True)
     if n_states == 1:
         axes = [axes]
 
@@ -113,9 +113,17 @@ def compare_model_predictions(
         ax = axes[s]
 
         # Ground truth
-        gt = GT[sim_offset + idx, s, :N]
-        ax.plot(time, gt.cpu().numpy(), linestyle="--", linewidth=1.3,
-                color="black", alpha=0.75, label=gt_label)
+        gt = GT[sim_offset + idx, s, :N].cpu().numpy()
+        # choose about 20 evenly spaced marker points
+        n_markers = 20
+        marker_idx = np.linspace(0, N - 1, n_markers, dtype=int)
+
+        ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black", alpha=0.75,
+                label=gt_label)
+
+        # overlay sparse markers for clarity
+        ax.plot(time[marker_idx], gt[marker_idx], marker='o', linestyle='None',
+                color="black", markersize=4, alpha=0.8, label=None)
 
         # Overlay all models
         for k, model in enumerate(models):
@@ -146,14 +154,21 @@ def compare_model_predictions(
     # One shared legend
     # Build a clean legend across axes: collect handles/labels from the last axis
     handles, labels = axes[-1].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.05),   # just above the plots
+        ncol=len(labels),             # all entries in one horizontal row
+        frameon=False
+    )
     # Deduplicate while preserving order
-    seen = set()
-    uniq = [(h, l) for h, l in zip(handles, labels)
-            if not (l in seen or seen.add(l))]
-    if uniq:
-        fig.legend(*zip(*uniq), loc="upper right", bbox_to_anchor=(0.98, 0.98))
+    # seen = set()
+    # uniq = [(h, l) for h, l in zip(handles, labels)
+    #         if not (l in seen or seen.add(l))]
+    # if uniq:
+    #     fig.legend(*zip(*uniq), loc="upper right", bbox_to_anchor=(0.98, 0.98))
 
-    fig.tight_layout(rect=[0, 0, 0.98, 0.96])
+    fig.tight_layout(rect=[0, 0, 1., 0.95])
     # plt.show()
     return fig, axes
 
@@ -732,7 +747,7 @@ def normalize_data(SimData_raw, nTrain, N):
     return SimData, mu_vec, std_vec
 
 
-def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=None):
+def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=1111):
     """
     Add noise to normalized simulation data.
 
