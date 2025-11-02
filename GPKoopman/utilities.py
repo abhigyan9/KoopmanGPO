@@ -23,7 +23,8 @@ def compare_model_predictions(
     compare_to="SimData",             # "SimData" or "SimData_clean"
     SimData_clean=None,               # required if compare_to="SimData_clean"
     sigma=1.0,                        # number of std-devs for bands (iGPK)
-    colors=None                       # optional color map per model
+    colors=None,                      # optional color map per model
+    skip_title=False
 ):
     """
     Compare time-series predictions from multiple models to ground truth, with optional uncertainty bands.
@@ -106,7 +107,8 @@ def compare_model_predictions(
 
     # Title
     gt_label = "NL (truth: noisy)" if compare_to == "SimData" else "NL (truth: clean)"
-    fig.suptitle(f"{system_name}: {title_suffix} [{split.capitalize()}]")
+    if skip_title is False:
+        fig.suptitle(f"{system_name}: {title_suffix} [{split.capitalize()}]")
 
     # Plot per state
     for s in range(n_states):
@@ -141,7 +143,7 @@ def compare_model_predictions(
                 # take diag element (state s) variance over time
                 var_s = Xcvhat[idx, s, s, :N]
                 # clamp small negatives due to numerical issues
-                std_s = torch.sqrt(torch.clamp(var_s, min=0.0))
+                std_s = torch.sqrt(torch.abs(var_s))
                 lower = (Xhat - sigma * std_s).cpu().numpy()
                 upper = (Xhat + sigma * std_s).cpu().numpy()
                 ax.fill_between(time, lower, upper, alpha=0.16, color=col)

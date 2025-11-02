@@ -1,6 +1,6 @@
 # sweep_noise.py
 import itertools
-from acc26_script import run_models_for_noise
+from scalarNL_script import run_models_for_noise
 
 SYSTEM_NAME = "Inhibited Predator-Prey"   # change as needed
 TRAIN_FRAC = 0.40
@@ -11,10 +11,10 @@ NOISE_TYPES = [
     "gaussian", "uniform"
 ]
 
-INTENSITIES = [0., 0.05, 0.1]  # normalized scale
+INTENSITIES = [0., 0.2, 0.5, 1.0]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
-OUTDIR = "Figures_Noise-Sweep_" + SYSTEM_NAME
+OUTDIR = "Figures_L4DC_" + SYSTEM_NAME
 
 for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, SEEDS):
     if intensity == 0.0 and noise_type != "gaussian":
@@ -32,7 +32,7 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         seed=seed,
         # (tweak model knobs if desired)
         lifted_order=10,
-        iters_list=(0, 20, 32, 150),
+        iters_list=(0, 20, 32, 100),
         learn_rate=0.04,
         opt_weights=(1.0, 1.0, 1.0),
         routine="BO_hp_and_GD_Z",
