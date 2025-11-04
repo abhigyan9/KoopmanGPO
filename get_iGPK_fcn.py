@@ -980,7 +980,7 @@ def get_iGPK(
         raise ValueError(f"Unrecognized train_method: {train_method}")
 
     # === Optimization ===
-    max_iter = iters_list[0]
+    max_iter = iters_list[3]
     lam1, lam2, lam3 = opt_weights
     iter = 0
     cost_history = []
@@ -1066,7 +1066,7 @@ def get_iGPK(
             [Z], lr=learn_rate, momentum=0.75, nesterov=True)
         while iter < max_iter:
             optimizer.zero_grad()
-            cost = get_cost_ACnew2(Z, X, Xplus, ObsManager,
+            cost = get_cost_simple(Z, X, Xplus, ObsManager,
                                    nT=nTrain, lambda1=lam1, lambda2=lam2, lambda3=lam3)
             cost.backward()
             optimizer.step()

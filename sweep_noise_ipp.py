@@ -11,7 +11,7 @@ NOISE_TYPES = [
     "gaussian", "uniform"
 ]
 
-INTENSITIES = [0., 0.2, 0.5, 1.0]  # normalized scale
+INTENSITIES = [0., 0.05, 0.1, 0.15]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
 OUTDIR = "Figures_L4DC_" + SYSTEM_NAME
@@ -32,10 +32,10 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         seed=seed,
         # (tweak model knobs if desired)
         lifted_order=10,
-        iters_list=(0, 20, 32, 100),
+        iters_list=(0, 32, 16, 400),
         learn_rate=0.04,
         opt_weights=(1.0, 1.0, 1.0),
-        routine="BO_hp_and_GD_Z",
+        routine="Z_only",
         train_method="Horizon",
         device="cuda:0",
         outdir=OUTDIR

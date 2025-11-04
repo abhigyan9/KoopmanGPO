@@ -5,7 +5,7 @@ from scalarNL_script import run_models_for_noise
 SYSTEM_NAME = "Scalar NL"   # change as needed
 TRAIN_FRAC = 0.40
 TEST_FRAC = 0.4
-CLIP = 20                 # or None
+CLIP = 10                 # or None
 
 NOISE_TYPES = [
     "gaussian", "uniform"
@@ -31,8 +31,8 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         intensity=intensity,
         seed=seed,
         # (tweak model knobs if desired)
-        iters_list=(0, 20, 32, 100),
         lifted_order=10,
+        iters_list=(0, 20, 32, 100),
         learn_rate=0.04,
         opt_weights=(1.0, 1.0, 1.0),
         routine="BO_hp_and_GD_Z",

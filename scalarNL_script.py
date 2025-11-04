@@ -21,7 +21,62 @@ def _save(fig, outdir, fname_stub: str):
     os.makedirs(outdir, exist_ok=True)
     path = os.path.join(outdir, f"{fname_stub}.png")
     fig.savefig(path, dpi=200, bbox_inches="tight")
-    print(f"saved: {path}")
+    # print(f"saved: {path}")
+
+
+def _nlpd_one(y, mu, S, jitter=1e-8):
+    """
+    NLPD for a single multivariate Gaussian y~N(mu,S).
+    y, mu: (n,)
+    S: (n,n) covariance
+    Returns scalar (float)
+    """
+    n = y.numel()
+    S = 0.5 * (S + S.T)  # symmetrize
+    S = S + jitter * torch.eye(n, dtype=S.dtype)
+    try:
+        L = torch.linalg.cholesky(S)
+        logdet = 2.0 * torch.log(torch.diag(L)).sum()
+        diff = (y - mu).view(n, 1)
+        sol = torch.cholesky_solve(diff, L)
+        quad = float((diff.T @ sol).item())
+        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
+    except Exception:
+        # Diagonal fallback
+        diag = torch.clamp(torch.diagonal(S), min=jitter)
+        logdet = torch.log(diag).sum()
+        quad = ((y - mu) ** 2 / diag).sum().item()
+        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
+
+def _nlpd_vs_time(Xhat, Xcv, GT):
+    """
+    Average NLPD per time-step across trajectories.
+    Xhat: (nTraj, n, N), Xcv: (nTraj, n, n, N), GT: (nTraj, n, N)
+    returns (N,) tensor
+    """
+    nTraj, n, N = Xhat.shape
+    vals = torch.empty(N, dtype=Xhat.dtype)
+    for k in range(N):
+        acc = 0.0
+        for j in range(nTraj):
+            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k], torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
+        vals[k] = acc / nTraj
+    return vals
+
+def _nlpd_per_traj(Xhat, Xcv, GT):
+    """
+    Average NLPD per trajectory across time-steps.
+    returns (nTraj,) tensor
+    """
+    nTraj, n, N = Xhat.shape
+    traj_vals = torch.empty(nTraj, dtype=Xhat.dtype)
+    for j in range(nTraj):
+        acc = 0.0
+        for k in range(N):
+            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k], torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
+        traj_vals[j] = acc / N
+    return traj_vals
+
 
 
 def run_models_for_noise(
@@ -57,11 +112,11 @@ def run_models_for_noise(
         system_name, train_frac, test_frac, clip=clip)
 
     # For Scalar NL we avoid normalisation to preserve interpretability
-    # if system_name.lower().startswith("scalar"):
-    SimData_clean = SimData_raw
-    # else:
-    #     SimData_clean, mu_vec, std_vec = gpk.normalize_data(
-    #         SimData_raw, nTrain, N)
+    if system_name.lower().startswith("scalar"):
+        SimData_clean = SimData_raw
+    else:
+        SimData_clean, mu_vec, std_vec = gpk.normalize_data(
+            SimData_raw, nTrain, N)
     # 2) Noise
     SimData = gpk.add_noise(SimData_clean, noise_type=noise_type,
                             intensity=intensity, seed=seed)
@@ -255,6 +310,57 @@ def run_models_for_noise(
         ax2.grid(True)
         _save(fig2, outdir, f"{tag}_transitionMap_iGPK_errorbars")
         plt.close(fig2)
+
+        # Eigen (iGPK)
+        fig_eig = gpk.plot_eigen(A_igpk)
+        _save(fig_eig, outdir, f"{tag}_eig_igpk")
+
+        # ==== NEW: NRMSE vs time-step (test set) for all models ====
+        def _nrmse_vs_time(Xhat_model, SimData, nTrain, N):
+            """
+            Returns a 1D tensor of length N: NRMSE_k averaged over test trajectories
+            (and states, if n>1) at each time step k.
+            """
+            # Ground-truth slice for test trajectories (shape: nTest, n, N)
+            GT = SimData[nTrain:nTrain + Xhat_model.shape[0], :, :N]
+
+            # RMSE over test trajectories at each time/state index
+            err = Xhat_model[:, :, :N] - GT
+            mse_t = err.pow(2).mean(dim=0)            # (n, N) mean over test trajs
+            rmse_t = torch.sqrt(mse_t)               # (n, N)
+
+            # Normalization range at each time/state (over test trajs)
+            max_t = GT.max(dim=0).values             # (n, N)
+            min_t = GT.min(dim=0).values             # (n, N)
+            rng_t = (max_t - min_t)
+            rng_t = torch.where(rng_t == 0, torch.ones_like(rng_t), rng_t)
+
+            nrmse_t = rmse_t / rng_t                 # (n, N)
+
+            # Average across states (for Scalar NL: n=1 so this is a no-op)
+            return nrmse_t.mean(dim=0).detach().cpu()  # (N,)
+
+        # Compute NRMSE vs time for each model
+        nrmse_vs_t = {
+            "iGPK":      _nrmse_vs_time(XhatTest,       SimData, nTrain, N),
+            "Poly-eDMD": _nrmse_vs_time(XhatTest_poly,  SimData, nTrain, N),
+            "RBF-eDMD":  _nrmse_vs_time(XhatTest_rbf,   SimData, nTrain, N),
+            "SSID-GPK":  _nrmse_vs_time(XhatTest_ssid,  SimData, nTrain, N),
+        }
+
+        # Plot: NRMSE vs time-step (optionally vs time in seconds if you prefer)
+        fig3, ax3 = plt.subplots(figsize=(6, 5))
+        t_axis = np.arange(N)  # time (seconds); use np.arange(N) for pure steps
+        for name, curve in nrmse_vs_t.items():
+            ax3.plot(t_axis, curve.numpy(), label=name)
+        ax3.set_xlabel("Time Step ($k$)")  # change to "Time step k" if using np.arange(N)
+        ax3.set_ylabel("NRMSE")
+        # ax3.set_title("Scalar NL: Test NRMSE vs Time-step (All Models)")
+        ax3.grid(True)
+        ax3.legend()
+        _save(fig3, outdir, f"{tag}_NRMSE_vs_time_test")
+        plt.close(fig3)
+        
     else:
         # For all other systems we defer to the time-series visualisations in
         # GPKoopman.  We reuse the same plotting logic as the ACC26 script.
@@ -321,6 +427,57 @@ def run_models_for_noise(
         )
         _save(fig_nrmse, outdir, f"{tag}_NRMSE_compare")
 
+        # d) Eigen (iGPK)
+        fig_eig = gpk.plot_eigen(A_igpk)
+        _save(fig_eig, outdir, f"{tag}_eig_igpk")
+
+        # ==== NEW: NLPD for iGPK & SSID-GPK (Train/Test) + plots & summary ====
+        # Ground-truth slices
+        GT_train = SimData[0:nTrain, :, :N-1]         # (nTrain, n, N)
+        GT_test  = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
+
+        # Curves vs time (mean over trajectories)
+        # nlpd_t_train_igpk  = _nlpd_vs_time(XhatTrain[:,:,:N-1],        XcvhatTrain[:,:,:,:N-1],        GT_train).detach().cpu()
+        nlpd_t_test_igpk   = _nlpd_vs_time(XhatTest[:,:,:N-1],         XcvhatTest[:,:,:,:N-1],         GT_test).detach().cpu()
+        # nlpd_t_train_ssid  = _nlpd_vs_time(XhatTrain_ssid[:,:,:N-1],   XcvhatTrain_ssid[:,:,:,:N-1],   GT_train).detach().cpu()
+        nlpd_t_test_ssid   = _nlpd_vs_time(XhatTest_ssid[:,:,:N-1],    XcvhatTest_ssid[:,:,:,:N-1],    GT_test).detach().cpu()
+
+        # Per-trajectory NLPD statistics (mean ± std across trajectories)
+        # nlpd_traj_train_igpk = _nlpd_per_traj(XhatTrain[:,:,:N-1],      XcvhatTrain[:,:,:,:N-1],      GT_train).detach().cpu()
+        nlpd_traj_test_igpk  = _nlpd_per_traj(XhatTest[:,:,:N-1],       XcvhatTest[:,:,:,:N-1],       GT_test).detach().cpu()
+        # nlpd_traj_train_ssid = _nlpd_per_traj(XhatTrain_ssid[:,:,:N-1], XcvhatTrain_ssid[:,:,:,:N-1], GT_train).detach().cpu()
+        nlpd_traj_test_ssid  = _nlpd_per_traj(XhatTest_ssid[:,:,:N-1],  XcvhatTest_ssid[:,:,:,:N-1],  GT_test).detach().cpu()
+
+        # Print summary
+        def _ms(x): 
+            return float(x.mean()), float(x.std(unbiased=False))
+        # m, s = _ms(nlpd_traj_train_igpk);  print(f"Train NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
+        # m, s = _ms(nlpd_traj_train_ssid);  print(f"Train NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_igpk);   print(f"Test  NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_ssid);   print(f"Test  NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
+
+        # Plots: NLPD vs time-step (Train)
+        # figN1, axN1 = plt.subplots(figsize=(6.5, 5))
+        # k_axis = np.arange(nlpd_t_train_igpk.numel())
+        # axN1.plot(k_axis, nlpd_t_train_igpk.numpy(),  label="iGPK (Train)")
+        # axN1.plot(k_axis, nlpd_t_train_ssid.numpy(),  label="SSID-GPK (Train)")
+        # axN1.set_xlabel("Time step ($k$)")
+        # axN1.set_ylabel("NLPD")
+        # axN1.grid(True); axN1.legend()
+        # _save(figN1, outdir, f"{tag}_NLPD_vs_time_train")
+        # plt.close(figN1)
+
+        # Plots: NLPD vs time-step (Test)
+        figN2, axN2 = plt.subplots(figsize=(6, 5))
+        k_axis = np.arange(nlpd_t_test_igpk.numel())
+        axN2.plot(k_axis, nlpd_t_test_igpk.numpy(),   label="iGPK (Test)")
+        axN2.plot(k_axis, nlpd_t_test_ssid.numpy(),   label="SSID-GPK (Test)")
+        axN2.set_xlabel("Time step ($k$)")
+        axN2.set_ylabel("NLPD")
+        axN2.grid(True); axN2.legend()
+        _save(figN2, outdir, f"{tag}_NLPD_vs_time_test")
+        plt.close(figN2)
+
     # Compute aggregate NRMSE metrics for reporting.  Use the mean over all
     # dimensions and trajectories for each model.  These values are stored in
     # the return dictionary under the "NRMSE" key.
@@ -334,18 +491,18 @@ def run_models_for_noise(
     print(
         f'Train NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
     print(f'========================================================')
-    print(f'Train NRMSE iGPK      = {TrainNRMSE.mean()*100:.2f} %')
-    print(f'Train NRMSE Poly-eDMD = {TrainNRMSE_poly.mean()*100:.2f} %')
-    print(f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} %')
-    print(f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} %')
+    print(f'Train NRMSE iGPK      = {TrainNRMSE.mean()*100:.2f} \u00B1 {(TrainNRMSE*100).std():.2f} %')
+    print(f'Train NRMSE Poly-eDMD = {TrainNRMSE_poly.mean()*100:.2f} \u00B1 {(TrainNRMSE_poly*100).std():.2f} %')
+    print(f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} \u00B1 {(TrainNRMSE_rbf*100).std():.2f} %')
+    print(f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} \u00B1 {(TrainNRMSE_ssid*100).std():.2f} %')
     print(f'========================================================')
     print(
         f'Test NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
     print(f'========================================================')
-    print(f'Test NRMSE iGPK      = {TestNRMSE.mean()*100:.2f} %')
-    print(f'Test NRMSE Poly-eDMD = {TestNRMSE_poly.mean()*100:.2f} %')
-    print(f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} %')
-    print(f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} %')
+    print(f'Test NRMSE iGPK      = {TestNRMSE.mean()*100:.2f} \u00B1 {(TestNRMSE*100).std():.2f} %')
+    print(f'Test NRMSE Poly-eDMD = {TestNRMSE_poly.mean()*100:.2f} \u00B1 {(TestNRMSE_poly*100).std():.2f} %')
+    print(f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} \u00B1 {(TestNRMSE_rbf*100).std():.2f} %')
+    print(f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} \u00B1 {(TestNRMSE_ssid*100).std():.2f} %')
     print(f'========================================================')
     print(f'========================================================')
     print(
@@ -357,6 +514,9 @@ def run_models_for_noise(
     print(f'Computation Time SSID-GPK   = {t_ssid:.2f} seconds')
     print(f'========================================================')
     print(f'========================================================')
+
+    plt.close('all')
+    print(f'All figures saved.')
 
     # Return bundle
     return {
