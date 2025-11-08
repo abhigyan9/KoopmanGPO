@@ -4,14 +4,14 @@ from scalarNL_script import run_models_for_noise
 
 SYSTEM_NAME = "Inhibited Predator-Prey"   # change as needed
 TRAIN_FRAC = 0.40
-TEST_FRAC = 0.3
+TEST_FRAC = 1 - TRAIN_FRAC
 CLIP = None                 # or None
 
 NOISE_TYPES = [
     "gaussian", "uniform"
 ]
 
-INTENSITIES = [0., 0.05, 0.1, 0.15]  # normalized scale
+INTENSITIES = [0., 0.05, 0.1]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
 OUTDIR = "Figures_L4DC_" + SYSTEM_NAME

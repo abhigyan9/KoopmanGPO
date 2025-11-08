@@ -48,6 +48,7 @@ def _nlpd_one(y, mu, S, jitter=1e-8):
         quad = ((y - mu) ** 2 / diag).sum().item()
         return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
 
+
 def _nlpd_vs_time(Xhat, Xcv, GT):
     """
     Average NLPD per time-step across trajectories.
@@ -59,9 +60,11 @@ def _nlpd_vs_time(Xhat, Xcv, GT):
     for k in range(N):
         acc = 0.0
         for j in range(nTraj):
-            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k], torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
+            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k],
+                             torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
         vals[k] = acc / nTraj
     return vals
+
 
 def _nlpd_per_traj(Xhat, Xcv, GT):
     """
@@ -73,10 +76,214 @@ def _nlpd_per_traj(Xhat, Xcv, GT):
     for j in range(nTraj):
         acc = 0.0
         for k in range(N):
-            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k], torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
+            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k],
+                             torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
         traj_vals[j] = acc / N
     return traj_vals
 
+
+def _diag_std_from_cov(Xcvhat, LB=1e-8):
+    # Xcvhat: (nTraj, n, n, N) -> std: (nTraj, n, N)
+    nTraj, n, _, N = Xcvhat.shape
+    temp = torch.clamp(torch.sqrt(
+        torch.abs(torch.diagonal(Xcvhat, dim1=1, dim2=2))), min=LB)
+    return torch.reshape(temp, (nTraj, n, N))
+
+
+def compute_interval_coverage(Xhat, Xcvhat, SimData, sim_offset=0, alpha_levels=[0.90, 0.95]):
+    """
+    Computes interval coverage metrics for specified alpha levels (e.g., 0.90, 0.95)
+    using predictive mean and covariance from the model.
+
+    Args:
+        Xhat:     (nTraj, n, N) predictive mean trajectories
+        Xcvhat:   (nTraj, n, n, N) predictive covariance trajectories
+        SimData:  (nTraj_total, n, N_total) ground truth trajectories
+        sim_offset: offset if test data is after training set
+        alpha_levels: list of confidence levels (default [0.90, 0.95])
+    Returns:
+        coverage_dict: {alpha: per-state coverage fraction tensor (n,)}
+    """
+    nTraj, n, N = Xhat.shape
+    coverage_dict = {}
+    quantiles = {0.90: 1.645, 0.95: 1.96}  # standard normal quantiles
+
+    # Stack all predictions for simplicity
+    y_true = SimData[sim_offset:sim_offset +
+                     nTraj, :, :N]          # (nTraj, n, N)
+    mu = Xhat
+    sigma = _diag_std_from_cov(Xcvhat)
+
+    for alpha in alpha_levels:
+        z = quantiles.get(alpha, 1.96)
+        lower = mu - z * sigma
+        upper = mu + z * sigma
+        inside = (y_true >= lower) & (y_true <= upper)
+        coverage_statewise = inside.float().mean(
+            dim=(0, 2))  # average over trajs & time
+        coverage_dict[alpha] = coverage_statewise.cpu()
+    return coverage_dict
+
+
+def coverage_curve(Xhat, Xcvhat, SimData, sim_offset=0, alphas=None, reduce="mean"):
+    """
+    Compute empirical coverage for 1D normal intervals across a grid of nominal levels.
+    Args:
+        Xhat:     (nTraj, n, N) predictive mean
+        Xcvhat:   (nTraj, n, n, N) predictive covariance
+        SimData:  (nTraj_total, n, N_total) ground truth
+        sim_offset: offset index in SimData (e.g., nTrain for test set)
+        alphas: list/1D-tensor of nominal coverages in [0,1] (e.g., 0.50..0.99)
+        reduce: "mean" → average over states; "none" → return per-state coverage
+    Returns:
+        alphas (tensor), empirical (tensor of shape (len(alphas),) or (len(alphas), n))
+    """
+    if alphas is None:
+        alphas = torch.linspace(0.50, 0.99, steps=50, device=Xhat.device)
+    alphas = torch.as_tensor(alphas, dtype=Xhat.dtype, device=Xhat.device)
+
+    # Standard normal quantile via erfinv: z = sqrt(2)*erfinv(alpha)
+    # (Strictly, two-sided interval half-width uses z such that P(|Z|<=z)=alpha, i.e., z = Φ^{-1}((1+alpha)/2))
+    from torch import special
+    z = torch.special.ndtri((1 + alphas) / 2)  # (A,)
+
+    y_true = SimData[sim_offset:sim_offset +
+                     Xhat.shape[0], :, :Xhat.shape[2]]  # (nTraj, n, N)
+    mu = Xhat
+    sigma = _diag_std_from_cov(Xcvhat)
+    nT, n, N = mu.shape
+    # Broadcast: for each alpha/z, build interval and test coverage
+    # Shapes:
+    #   mu, sigma, y_true : (T, n, N)
+    #   z[:,None,None,None] → (A,1,1,1)
+    lower, upper = torch.empty((len(alphas), nT, n, N)), torch.empty(
+        (len(alphas), nT, n, N))
+    for i in range(alphas.shape[0]):
+        lower[i, :, :, :] = mu - z[i] * sigma
+        upper[i, :, :, :] = mu + z[i] * sigma
+    inside = (y_true >= lower) & (y_true <= upper)
+    emp_coverage_state = inside.float().mean(dim=(1, 3))
+    # lower = mu. - z.view(-1, 1, 1, 1) * sigma.unsqueeze(0)  # (A,T,n,N)
+    # upper = mu.unsqueeze(0) + z.view(-1, 1, 1, 1) * \
+    #     sigma.unsqueeze(0)  # (A,T,n,N)
+    # inside = (y_true.unsqueeze(0) >= lower) & (
+    #     y_true.unsqueeze(0) <= upper)  # (A,T,n,N)
+
+    # Per-state empirical coverage
+    # emp_state = inside.float().mean(dim=(1, 3))  # (A, n) avg over traj & time
+
+    if reduce == "mean":
+        # mean over states, keep one value per alpha: (A,)
+        return alphas, emp_coverage_state.mean(dim=1)        # <-- FIXED
+    elif reduce == "none":
+        return alphas, emp_coverage_state
+    else:
+        raise ValueError("reduce must be 'mean' or 'none'")
+
+
+def miscalibration_area(alphas, empirical):
+    """
+    L1 area between empirical and nominal coverage curves.
+    Args:
+        alphas:    (A,)
+        empirical: (A,) mean curve (use reduce='mean') or (A,n) per-state
+    Returns:
+        scalar if 1D, or (n,) if per-state
+    """
+    # Trapezoidal rule on |emp - alpha|
+    diff = (empirical - alphas.unsqueeze(-1)
+            ) if empirical.ndim == 2 else (empirical - alphas)
+    area = torch.trapz(diff.abs(), alphas, dim=0)
+    return area
+
+
+def plot_calibration_curve(alphas, empirical, title="Calibration Curve", label=None):
+    """
+    One figure per curve set. Draws y=x reference and a single empirical curve.
+    """
+    # ensure 1D cpu numpy arrays
+    a = alphas.detach().cpu().view(-1).numpy()
+    e = empirical.detach().cpu().view(-1).numpy()
+
+    fig, ax = plt.subplots()
+    ax.plot(a, a, linestyle='--', label='Ideal')
+    ax.plot(a, e, marker='o', linestyle='-',
+            label=label if label else 'Empirical')
+    ax.set_xlabel("Nominal Coverage")
+    ax.set_ylabel("Empirical Coverage")
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(True)
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax   # <-- return handles upstream unpacking & saving
+
+
+def compare_coverage_curves(
+    alphas1, emp_state1,
+    alphas2, emp_state2,
+    system_name="System",
+    split="test",
+    save_path=None
+):
+    """
+    Compare two empirical coverage curves (SSID-GPK vs iGPK).
+
+    Args:
+        alphas1, emp_state1: tensors for first model (SSID-GPK)
+        alphas2, emp_state2: tensors for second model (iGPK)
+        system_name (str): name of the system for plot title
+        split (str): 'train' or 'test'
+        save_path (str, optional): if given, saves plot instead of showing
+    """
+
+    # Ensure torch tensors → numpy arrays
+    alphas1 = alphas1.detach().cpu().numpy() if torch.is_tensor(alphas1) else alphas1
+    emp_state1 = emp_state1.detach().cpu().numpy(
+    ) if torch.is_tensor(emp_state1) else emp_state1
+    alphas2 = alphas2.detach().cpu().numpy() if torch.is_tensor(alphas2) else alphas2
+    emp_state2 = emp_state2.detach().cpu().numpy(
+    ) if torch.is_tensor(emp_state2) else emp_state2
+
+    # Plot
+    plt.figure(figsize=(5, 5))
+    plt.plot(alphas1 * 100, emp_state1
+             * 100, 'o-', label="SSID-GPK", lw=2)
+    plt.plot(alphas2 * 100, emp_state2
+             * 100, 's--', label="iGPK", lw=2)
+    plt.plot([50, 100], [50, 100], 'k--', alpha=0.7, label="Ideal")
+
+    plt.xlabel("Nominal Coverage (%)", fontsize=11)
+    plt.ylabel("Empirical Coverage (%)", fontsize=11)
+    # plt.title(f"{system_name} ({split.capitalize()} Set)", fontsize=12)
+    plt.grid(True, linestyle=':', alpha=0.8)
+    plt.legend(frameon=True)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_calibration_per_state(alphas, empirical_state, state_labels=None, title="Per-State Calibration"):
+    a = alphas.detach().cpu().view(-1).numpy()
+    es = empirical_state.detach().cpu().numpy()  # (A, n)
+    fig, ax = plt.subplots()
+    ax.plot(a, a, linestyle='--', label='Ideal')
+    n = es.shape[1]
+    for i in range(n):
+        lab = state_labels[i] if state_labels else f"x{i+1}"
+        ax.plot(a, es[:, i], marker='o', linestyle='-', label=lab)
+    ax.set_xlabel("Nominal Coverage")
+    ax.set_ylabel("Empirical Coverage")
+    if title is not None:
+        ax.set_title(title)
+    ax.grid(True)
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
 
 
 def run_models_for_noise(
@@ -112,7 +319,7 @@ def run_models_for_noise(
         system_name, train_frac, test_frac, clip=clip)
 
     # For Scalar NL we avoid normalisation to preserve interpretability
-    if system_name.lower().startswith("scalar"):
+    if system_name.lower().startswith("vec"):
         SimData_clean = SimData_raw
     else:
         SimData_clean, mu_vec, std_vec = gpk.normalize_data(
@@ -144,6 +351,7 @@ def run_models_for_noise(
 
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
+    ObsManager_iGPK = results["ObsManager"]
     XhatTrain, XcvhatTrain, TrainNRMSE = results["Train"][
         "Xhat"], results["Train"]["Xcv"], results["Train"]["NRMSE"]
     XhatTest,  XcvhatTest,  TestNRMSE = results["Test"][
@@ -182,6 +390,7 @@ def run_models_for_noise(
 
     # unpack SSID-GPK results
     A_ssid, C_ssid = results_ssid["A"], results_ssid["C"]
+    ObsManager_ssid = results_ssid["ObsManager"]
     XhatTrain_ssid, XcvhatTrain_ssid, TrainNRMSE_ssid = results_ssid["Train"][
         "Xhat"], results_ssid["Train"]["Xcv"], results_ssid["Train"]["NRMSE"]
     XhatTest_ssid,  XcvhatTest_ssid,  TestNRMSE_ssid = results_ssid["Test"][
@@ -210,8 +419,8 @@ def run_models_for_noise(
     tag = f"{system_name.replace(' ', '_')}_noise-{noise_type}_int-{intensity:.3f}_seed-{seed}_{stamp}"
 
     if system_name.lower().startswith("scalar"):
-        # Generate 20 evenly spaced initial conditions in [-7, 7]
-        x0_vals = torch.linspace(-7.0, 7.0, 25, dtype=torch.float64)
+        # Generate 20 evenly spaced initial conditions in [-8, 8]
+        x0_vals = torch.linspace(-6.0, 6.0, 25, dtype=C_igpk.dtype)
         # Compute true one-step evolution using the provided discrete-time simulator.
         # The sim_discrete function returns a tensor of shape (n, num_steps).  We
         # request two steps (initial and next) to extract the one-step map.
@@ -223,93 +432,41 @@ def run_models_for_noise(
             x1_true.append(states[0, 1])
         x1_true = torch.stack(x1_true)
 
-        # Compute model predictions for the same initial conditions.  Each
-        # Koopman model defines a linear evolution on a lifted space.  We
-        # attempt to obtain the predicted next state via a helper in the
-        # GPKoopman package.  Because different packages may expose this
-        # functionality under different names, we wrap the call in a
-        # try/except and fall back to the true values if prediction helpers
-        # are unavailable.  Note: this fallback ensures the plotting code
-        # continues to work even when a model does not support arbitrary
-        # evaluation outside the training data.
-        preds = {}
-        for name, A, C in [
-            ("iGPK", A_igpk, C_igpk),
-            ("Poly-eDMD", A_poly, C_poly),
-            ("RBF-eDMD", A_rbf, C_rbf),
-            ("SSID-GPK", A_ssid, C_ssid),
-        ]:
-            model_pred = []
-            for x0 in x0_vals:
-                x0_tensor = x0.view(1)
-                try:
-                    # Try to leverage a dedicated Koopman prediction helper.  This
-                    # function hypothetically lifts x0 into the latent space,
-                    # propagates one step via A and projects back down via C.
-                    x1_model = gpk.predict_next_state(A, C, x0_tensor)
-                except Exception:
-                    # Fallback: use the true dynamics when prediction helpers are
-                    # unavailable.  This ensures the loop completes even if
-                    # arbitrary evaluation is not supported by the model.
-                    x1_model = gpk.df_scalarNL(x0_tensor)
-                # If the helper returns a tensor with a batch dimension, take
-                # the first element.  Use .detach() to avoid tracing gradients.
-                if isinstance(x1_model, torch.Tensor):
-                    x1_model_val = x1_model.view(-1)[0].detach().cpu()
-                else:
-                    x1_model_val = torch.tensor(float(x1_model))
-                model_pred.append(x1_model_val)
-            preds[name] = torch.stack(model_pred)
+        Zmean = torch.zeros((x0_vals.shape[0], C_igpk.shape[1], 3))
+        Zcv = torch.zeros(
+            (x0_vals.shape[0], C_igpk.shape[1], C_igpk.shape[1], 3))
 
+        preds = torch.zeros((x0_vals.shape[0], C_igpk.shape[0], 3))
+        preds_cv = torch.zeros(
+            (x0_vals.shape[0], C_igpk.shape[0], C_igpk.shape[0], 3))
+
+        for j in range(x0_vals.shape[0]):
+            # lift all states
+            for i in range(C_igpk.shape[1]):
+                Zmean[j, i, 0] = ObsManager_iGPK.predict_mean(
+                    i, x0_vals[j].view(1, 1))
+                Zcv[j, i, i, 0] = ObsManager_iGPK.predict_covariance(
+                    i, x0_vals[j].view(1, 1))
+
+            _, _, preds[j, :, :], preds_cv[j, :, :, :] = gpk.sim_LTI(
+                Zmean[j, :, 0].view(C_igpk.shape[1], 1).cpu(), A_igpk.cpu(), C_igpk.cpu(), num_steps=3, ts=None, x0cv=Zcv[j, :, :, 0].cpu())
+
+        preds = preds.squeeze(1).detach().cpu()
+        preds_cv = torch.abs(preds_cv.squeeze().detach().cpu())
+        print(f'All the sigma is {torch.sqrt(preds_cv)}')
         # First figure: compare all models against the true mapping
         fig1, ax1 = plt.subplots(figsize=(7, 6))
         ax1.plot(x0_vals.numpy(), x1_true.numpy(),
                  'k-o', label='Original', markersize=4)
-        for name in preds:
-            ax1.plot(x0_vals.numpy(), preds[name].numpy(), '--', label=name)
-        ax1.set_title("Scalar NL: x_1 vs x_0 (All Models)")
-        ax1.set_xlabel("x_0")
-        ax1.set_ylabel("x_1")
+        ax1.errorbar(x0_vals.numpy(),
+                     preds[:, 1], yerr=torch.sqrt(preds_cv[:, 1]), fmt='o', capsize=5, label='iGPK')
+        # ax1.set_title("Scalar NL: x_1 vs x_0 (All Models)")
+        ax1.set_xlabel("$x_0$")
+        ax1.set_ylabel("$x_1$")
         ax1.legend()
         ax1.grid(True)
-        _save(fig1, outdir, f"{tag}_phase_all_models")
+        _save(fig1, outdir, f"{tag}_1step-errorbar_iGPK-only")
         plt.close(fig1)
-
-        # Second figure: compare iGPK to true mapping with error bars.  We
-        # extract predictive covariance if available in the result dict; when
-        # absent we fall back to a small constant variance for visual
-        # illustration.  The variance is transformed into standard deviation
-        # for plotting symmetric error bars.
-        igpk_preds = preds.get("iGPK", x1_true)
-        # Determine covariance: use XcvhatTest from the trained iGPK if the
-        # first element is compatible; otherwise default to a small value.
-        try:
-            # XcvhatTest has shape (n_state, num_time, num_traj).  We want the
-            # covariance of the state dimension at the first prediction time
-            # across the training set.  Taking the diagonal ensures a 1D
-            # variance tensor.  Use abs to guard against negative values due
-            # numerical artefacts.
-            # mean variance across trajectories
-            cov = torch.abs(XcvhatTest[0, 1, :]).mean()
-            std_val = math.sqrt(float(cov))
-            stds = torch.full_like(x1_true, std_val)
-        except Exception:
-            stds = torch.full_like(x1_true, 0.1)
-        fig2, ax2 = plt.subplots(figsize=(6, 6))
-        # ax2.errorbar(x0_vals.numpy(), x1_true.numpy(), yerr=stds.numpy(
-        # ), fmt='k-o', label='Original', markersize=4, capsize=3)
-        ax2.plot(x0_vals.numpy(), x1_true.numpy(),
-                 label='Original', markersize=4)
-        ax2.errorbar(x0_vals.numpy(), igpk_preds.numpy(), yerr=stds.numpy(
-        ), fmt='--o', label='iGPK', markersize=4, capsize=3)
-        # ax2.set_title(
-        #     "Scalar NL: x_1 vs x_0 (iGPK vs Original with Covariance)")
-        ax2.set_xlabel("$x_k$")
-        ax2.set_ylabel("$x_{k+1}$")
-        ax2.legend()
-        ax2.grid(True)
-        _save(fig2, outdir, f"{tag}_transitionMap_iGPK_errorbars")
-        plt.close(fig2)
 
         # Eigen (iGPK)
         fig_eig = gpk.plot_eigen(A_igpk)
@@ -318,15 +475,17 @@ def run_models_for_noise(
         # ==== NEW: NRMSE vs time-step (test set) for all models ====
         def _nrmse_vs_time(Xhat_model, SimData, nTrain, N):
             """
-            Returns a 1D tensor of length N: NRMSE_k averaged over test trajectories
+            Returns a 1D tensor of length N: % NRMSE_k averaged over test trajectories
             (and states, if n>1) at each time step k.
             """
             # Ground-truth slice for test trajectories (shape: nTest, n, N)
+            # nTrain:nTrain + Xhat_model.shape[0]
             GT = SimData[nTrain:nTrain + Xhat_model.shape[0], :, :N]
 
             # RMSE over test trajectories at each time/state index
             err = Xhat_model[:, :, :N] - GT
-            mse_t = err.pow(2).mean(dim=0)            # (n, N) mean over test trajs
+            # (n, N) mean over test trajs
+            mse_t = err.pow(2).mean(dim=0)
             rmse_t = torch.sqrt(mse_t)               # (n, N)
 
             # Normalization range at each time/state (over test trajs)
@@ -338,7 +497,7 @@ def run_models_for_noise(
             nrmse_t = rmse_t / rng_t                 # (n, N)
 
             # Average across states (for Scalar NL: n=1 so this is a no-op)
-            return nrmse_t.mean(dim=0).detach().cpu()  # (N,)
+            return 100 * nrmse_t.mean(dim=0).detach().cpu()  # (N,)
 
         # Compute NRMSE vs time for each model
         nrmse_vs_t = {
@@ -350,17 +509,19 @@ def run_models_for_noise(
 
         # Plot: NRMSE vs time-step (optionally vs time in seconds if you prefer)
         fig3, ax3 = plt.subplots(figsize=(6, 5))
-        t_axis = np.arange(N)  # time (seconds); use np.arange(N) for pure steps
+        # time (seconds); use np.arange(N) for pure steps
+        t_axis = np.arange(N)
         for name, curve in nrmse_vs_t.items():
             ax3.plot(t_axis, curve.numpy(), label=name)
-        ax3.set_xlabel("Time Step ($k$)")  # change to "Time step k" if using np.arange(N)
-        ax3.set_ylabel("NRMSE")
+        # change to "Time step k" if using np.arange(N)
+        ax3.set_xlabel("Time Step ($k$)")
+        ax3.set_ylabel("Percent NRMSE")
         # ax3.set_title("Scalar NL: Test NRMSE vs Time-step (All Models)")
         ax3.grid(True)
         ax3.legend()
         _save(fig3, outdir, f"{tag}_NRMSE_vs_time_test")
         plt.close(fig3)
-        
+
     else:
         # For all other systems we defer to the time-series visualisations in
         # GPKoopman.  We reuse the same plotting logic as the ACC26 script.
@@ -419,6 +580,56 @@ def run_models_for_noise(
             )
             _save(fig, outdir, f"{tag}_timeseries_igpk_noCV_{which}")
 
+        train_int_coverage = compute_interval_coverage(
+            XhatTrain, XcvhatTrain, SimData, sim_offset=0)
+        test_int_coverage = compute_interval_coverage(
+            XhatTest,  XcvhatTest,  SimData, sim_offset=nTrain)
+
+        print("Train coverage (per state):")
+        for alpha, vals in train_int_coverage.items():
+            print(f"  {int(alpha*100)}% interval: {vals.numpy()*100}")
+        print("\nTest coverage (per state):")
+        for alpha, vals in test_int_coverage.items():
+            print(f"  {int(alpha*100)}% interval: {vals.numpy()*100}")
+        # Choose a coverage grid (50%..99%)
+        alphas = torch.linspace(0.50, 0.99, steps=50)
+
+        # iGPK
+        a_tr_i, emp_tr_i = coverage_curve(
+            XhatTrain, XcvhatTrain, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
+        a_te_i, emp_te_i = coverage_curve(
+            XhatTest,  XcvhatTest,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
+        fig, _ = plot_calibration_curve(
+            a_tr_i, emp_tr_i, title="iGPK — Train Calibration", label="Empirical")
+        _save(fig, outdir, f"{tag}_Calibration_Curve-Train-iGPK")
+
+        fig, _ = plot_calibration_curve(
+            a_te_i, emp_te_i, title="iGPK — Test Calibration",  label="Empirical")
+        _save(fig, outdir, f"{tag}_Calibration_Curve-Test-iGPK")
+
+        print("iGPK miscalibration area (train/test):",
+              miscalibration_area(a_tr_i, emp_tr_i).item(),
+              miscalibration_area(a_te_i, emp_te_i).item())
+
+        # SSID-GPK
+        a_tr_s, emp_tr_s = coverage_curve(
+            XhatTrain_ssid, XcvhatTrain_ssid, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
+        a_te_s, emp_te_s = coverage_curve(
+            XhatTest_ssid,  XcvhatTest_ssid,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
+        fig, _ = plot_calibration_curve(
+            a_tr_s, emp_tr_s, title="SSID-GPK — Train Calibration", label="Empirical")
+        _save(fig, outdir, f"{tag}_Calibration_Curve-Train-SSID_GPK")
+        fig, _ = plot_calibration_curve(
+            a_te_s, emp_te_s, title="SSID-GPK — Test Calibration",  label="Empirical")
+        _save(fig, outdir, f"{tag}_Calibration_Curve-Test-SSID_GPK")
+
+        compare_coverage_curves(a_te_s, emp_te_s, a_te_i, emp_te_i,
+                                system_name="Lorenz", split="test", save_path=outdir)
+
+        print("SSID-GPK miscalibration area (train/test):",
+              miscalibration_area(a_tr_s, emp_tr_s).item(),
+              miscalibration_area(a_te_s, emp_te_s).item())
+
         # c) NRMSE comparison plot
         fig_nrmse = gpk.plot_NRMSE_metrics(
             [TrainNRMSE, TrainNRMSE_poly, TrainNRMSE_rbf, TrainNRMSE_ssid],
@@ -434,27 +645,33 @@ def run_models_for_noise(
         # ==== NEW: NLPD for iGPK & SSID-GPK (Train/Test) + plots & summary ====
         # Ground-truth slices
         GT_train = SimData[0:nTrain, :, :N-1]         # (nTrain, n, N)
-        GT_test  = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
+        GT_test = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
 
         # Curves vs time (mean over trajectories)
         # nlpd_t_train_igpk  = _nlpd_vs_time(XhatTrain[:,:,:N-1],        XcvhatTrain[:,:,:,:N-1],        GT_train).detach().cpu()
-        nlpd_t_test_igpk   = _nlpd_vs_time(XhatTest[:,:,:N-1],         XcvhatTest[:,:,:,:N-1],         GT_test).detach().cpu()
+        nlpd_t_test_igpk = _nlpd_vs_time(
+            XhatTest[:, :, :N-1],         XcvhatTest[:, :, :, :N-1],         GT_test).detach().cpu()
         # nlpd_t_train_ssid  = _nlpd_vs_time(XhatTrain_ssid[:,:,:N-1],   XcvhatTrain_ssid[:,:,:,:N-1],   GT_train).detach().cpu()
-        nlpd_t_test_ssid   = _nlpd_vs_time(XhatTest_ssid[:,:,:N-1],    XcvhatTest_ssid[:,:,:,:N-1],    GT_test).detach().cpu()
+        nlpd_t_test_ssid = _nlpd_vs_time(
+            XhatTest_ssid[:, :, :N-1],    XcvhatTest_ssid[:, :, :, :N-1],    GT_test).detach().cpu()
 
         # Per-trajectory NLPD statistics (mean ± std across trajectories)
         # nlpd_traj_train_igpk = _nlpd_per_traj(XhatTrain[:,:,:N-1],      XcvhatTrain[:,:,:,:N-1],      GT_train).detach().cpu()
-        nlpd_traj_test_igpk  = _nlpd_per_traj(XhatTest[:,:,:N-1],       XcvhatTest[:,:,:,:N-1],       GT_test).detach().cpu()
+        nlpd_traj_test_igpk = _nlpd_per_traj(
+            XhatTest[:, :, :N-1],       XcvhatTest[:, :, :, :N-1],       GT_test).detach().cpu()
         # nlpd_traj_train_ssid = _nlpd_per_traj(XhatTrain_ssid[:,:,:N-1], XcvhatTrain_ssid[:,:,:,:N-1], GT_train).detach().cpu()
-        nlpd_traj_test_ssid  = _nlpd_per_traj(XhatTest_ssid[:,:,:N-1],  XcvhatTest_ssid[:,:,:,:N-1],  GT_test).detach().cpu()
+        nlpd_traj_test_ssid = _nlpd_per_traj(
+            XhatTest_ssid[:, :, :N-1],  XcvhatTest_ssid[:, :, :, :N-1],  GT_test).detach().cpu()
 
         # Print summary
-        def _ms(x): 
+        def _ms(x):
             return float(x.mean()), float(x.std(unbiased=False))
         # m, s = _ms(nlpd_traj_train_igpk);  print(f"Train NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
         # m, s = _ms(nlpd_traj_train_ssid);  print(f"Train NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
-        m, s = _ms(nlpd_traj_test_igpk);   print(f"Test  NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
-        m, s = _ms(nlpd_traj_test_ssid);   print(f"Test  NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_igpk)
+        print(f"Test  NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_ssid)
+        print(f"Test  NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
 
         # Plots: NLPD vs time-step (Train)
         # figN1, axN1 = plt.subplots(figsize=(6.5, 5))
@@ -474,7 +691,8 @@ def run_models_for_noise(
         axN2.plot(k_axis, nlpd_t_test_ssid.numpy(),   label="SSID-GPK (Test)")
         axN2.set_xlabel("Time step ($k$)")
         axN2.set_ylabel("NLPD")
-        axN2.grid(True); axN2.legend()
+        axN2.grid(True)
+        axN2.legend()
         _save(figN2, outdir, f"{tag}_NLPD_vs_time_test")
         plt.close(figN2)
 
@@ -491,18 +709,26 @@ def run_models_for_noise(
     print(
         f'Train NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
     print(f'========================================================')
-    print(f'Train NRMSE iGPK      = {TrainNRMSE.mean()*100:.2f} \u00B1 {(TrainNRMSE*100).std():.2f} %')
-    print(f'Train NRMSE Poly-eDMD = {TrainNRMSE_poly.mean()*100:.2f} \u00B1 {(TrainNRMSE_poly*100).std():.2f} %')
-    print(f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} \u00B1 {(TrainNRMSE_rbf*100).std():.2f} %')
-    print(f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} \u00B1 {(TrainNRMSE_ssid*100).std():.2f} %')
+    print(
+        f'Train NRMSE iGPK      = {TrainNRMSE.mean()*100:.2f} \u00B1 {(TrainNRMSE*100).std():.2f} %')
+    print(
+        f'Train NRMSE Poly-eDMD = {TrainNRMSE_poly.mean()*100:.2f} \u00B1 {(TrainNRMSE_poly*100).std():.2f} %')
+    print(
+        f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} \u00B1 {(TrainNRMSE_rbf*100).std():.2f} %')
+    print(
+        f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} \u00B1 {(TrainNRMSE_ssid*100).std():.2f} %')
     print(f'========================================================')
     print(
         f'Test NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
     print(f'========================================================')
-    print(f'Test NRMSE iGPK      = {TestNRMSE.mean()*100:.2f} \u00B1 {(TestNRMSE*100).std():.2f} %')
-    print(f'Test NRMSE Poly-eDMD = {TestNRMSE_poly.mean()*100:.2f} \u00B1 {(TestNRMSE_poly*100).std():.2f} %')
-    print(f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} \u00B1 {(TestNRMSE_rbf*100).std():.2f} %')
-    print(f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} \u00B1 {(TestNRMSE_ssid*100).std():.2f} %')
+    print(
+        f'Test NRMSE iGPK      = {TestNRMSE.mean()*100:.2f} \u00B1 {(TestNRMSE*100).std():.2f} %')
+    print(
+        f'Test NRMSE Poly-eDMD = {TestNRMSE_poly.mean()*100:.2f} \u00B1 {(TestNRMSE_poly*100).std():.2f} %')
+    print(
+        f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} \u00B1 {(TestNRMSE_rbf*100).std():.2f} %')
+    print(
+        f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} \u00B1 {(TestNRMSE_ssid*100).std():.2f} %')
     print(f'========================================================')
     print(f'========================================================')
     print(
