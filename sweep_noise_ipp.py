@@ -11,7 +11,7 @@ NOISE_TYPES = [
     "gaussian", "uniform"
 ]
 
-INTENSITIES = [0., 0.05, 0.1]  # normalized scale
+INTENSITIES = [0., 0.05, 0.1, 0.2]  # normalized scale
 SEEDS = [100]                      # repeatability / variability
 
 OUTDIR = "Figures_L4DC_" + SYSTEM_NAME

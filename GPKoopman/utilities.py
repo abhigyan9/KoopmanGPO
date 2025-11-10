@@ -24,7 +24,8 @@ def compare_model_predictions(
     SimData_clean=None,               # required if compare_to="SimData_clean"
     sigma=1.0,                        # number of std-devs for bands (iGPK)
     colors=None,                      # optional color map per model
-    skip_title=False
+    skip_title=False,
+    y_labels=None
 ):
     """
     Compare time-series predictions from multiple models to ground truth, with optional uncertainty bands.
@@ -101,7 +102,7 @@ def compare_model_predictions(
     # Setup figure/axes
     fig_height = max(5, 1.8 * n_states)
     fig, axes = plt.subplots(
-        n_states, 1, figsize=(6, fig_height), sharex=True)
+        n_states, 1, figsize=(5, fig_height), sharex=True)
     if n_states == 1:
         axes = [axes]
 
@@ -120,12 +121,12 @@ def compare_model_predictions(
         n_markers = 20
         marker_idx = np.linspace(0, N - 1, n_markers, dtype=int)
 
-        ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black", alpha=0.75,
-                label=gt_label)
+        # ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black", alpha=0.75,
+        #         label=gt_label)
 
         # overlay sparse markers for clarity
-        ax.plot(time[marker_idx], gt[marker_idx], marker='o', linestyle='None',
-                color="black", markersize=4, alpha=0.8, label=None)
+        ax.plot(time[marker_idx], gt[marker_idx], marker='o', linestyle='--',
+                linewidth=1.3, color="black", markersize=4, alpha=0.8, label='Truth')
 
         # Overlay all models
         for k, model in enumerate(models):
@@ -148,7 +149,10 @@ def compare_model_predictions(
                 upper = (Xhat + sigma * std_s).cpu().numpy()
                 ax.fill_between(time, lower, upper, alpha=0.16, color=col)
 
-        ax.set_ylabel(f"X{s+1}")
+        if y_labels is None:
+            ax.set_ylabel(f"X{s+1}")
+        else:
+            ax.set_ylabel(f'${y_labels[s]}$')
         ax.grid(True, linestyle=":", linewidth=0.7)
 
     axes[-1].set_xlabel("Time [s]")

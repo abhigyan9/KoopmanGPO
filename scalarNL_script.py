@@ -246,7 +246,7 @@ def compare_coverage_curves(
     ) if torch.is_tensor(emp_state2) else emp_state2
 
     # Plot
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(5, 4.5))
     plt.plot(alphas1 * 100, emp_state1
              * 100, 'o-', label="SSID-GPK", lw=2)
     plt.plot(alphas2 * 100, emp_state2
@@ -527,6 +527,7 @@ def run_models_for_noise(
         # GPKoopman.  We reuse the same plotting logic as the ACC26 script.
         # Note: these calls may be unused in the Scalar NL workflow but are
         # included for completeness if this helper is reused on other systems.
+        y_labels = ['P(t)', 'Q(t)']
         for (which, idx, split, sim_offset, suffix) in [
             ("best-train", idx_trainMIN, "train", 0,         "Best_Train"),
             ("best-test",  idx_testMIN,  "test",  nTrain,    "Best_Test"),
@@ -536,8 +537,8 @@ def run_models_for_noise(
                 time=time_arr, models=models, SimData=SimData, idx=idx, N=(
                     SimData.shape[2]-1),
                 system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True
-            )
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_{which}")
 
             models_nocv = [
@@ -554,8 +555,8 @@ def run_models_for_noise(
                 time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
                     SimData.shape[2]-1),
                 system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True
-            )
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
             models_iGPK = [
@@ -565,8 +566,8 @@ def run_models_for_noise(
                 time=time_arr, models=models_iGPK, SimData=SimData, idx=idx, N=(
                     SimData.shape[2]-1),
                 system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True
-            )
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_igpkONLY_{which}")
 
             models_iGPK_noCV = [
@@ -576,8 +577,8 @@ def run_models_for_noise(
                 time=time_arr, models=models_iGPK_noCV, SimData=SimData, idx=idx, N=(
                     SimData.shape[2]-1),
                 system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True
-            )
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_igpk_noCV_{which}")
 
         train_int_coverage = compute_interval_coverage(
@@ -623,8 +624,9 @@ def run_models_for_noise(
             a_te_s, emp_te_s, title="SSID-GPK — Test Calibration",  label="Empirical")
         _save(fig, outdir, f"{tag}_Calibration_Curve-Test-SSID_GPK")
 
+        save_path = os.path.join(outdir, f"{tag}_CalibCurve_Compare.png")
         compare_coverage_curves(a_te_s, emp_te_s, a_te_i, emp_te_i,
-                                system_name="Lorenz", split="test", save_path=outdir)
+                                system_name="Lorenz", split="test", save_path=save_path)
 
         print("SSID-GPK miscalibration area (train/test):",
               miscalibration_area(a_tr_s, emp_tr_s).item(),
