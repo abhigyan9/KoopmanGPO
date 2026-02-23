@@ -207,7 +207,7 @@ if __name__ == "__main__":
     # ---------------------------
     # Output config
     # ---------------------------
-    OUTDIR = "PERTURBATION_ANALYSIS_OUT"
+    OUTDIR = "Figures/PERTURBATION_ANALYSIS_OUT"
     _ensure_dir(OUTDIR)
 
     SYS = _slug(SYSTEM_NAME)

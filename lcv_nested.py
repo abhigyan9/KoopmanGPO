@@ -255,7 +255,7 @@ class ExperimentConfig:
     lambda1: float = 1.0
     lambda2: float = 1.0
 
-    out_dir: str = "igpk_grad_sweep_out"
+    out_dir: str = "Figures/igpk_grad_sweep_out"
     out_name: str = f"grad_norm_nested_{system_name}_HP{num_trials_hp}_Z{num_trials_Z}_{noise_type}{noise_level}"
 
 
