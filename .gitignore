@@ -1,5 +1,5 @@
 # Ignore the virtual environment folder
-GPKenv/
+kvenv/
 
 # Ignore compiled Python files
 __pycache__/

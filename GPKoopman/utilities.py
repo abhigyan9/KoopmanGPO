@@ -163,7 +163,7 @@ def compare_model_predictions(
     fig.legend(
         handles, labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.05),   # just above the plots
+        bbox_to_anchor=(0.5, 1.03),   # just above the plots
         ncol=len(labels),             # all entries in one horizontal row
         frameon=False
     )
@@ -181,59 +181,69 @@ def compare_model_predictions(
 
 def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
     """
-    Compare Train/Test NRMSE across multiple models.
+    Compare Train/Test NRMSE across multiple models using boxplots (no per-trajectory curves).
+    Adds a circular marker to indicate the mean on each box.
 
     Args:
         TrainNRMSE_list (list of torch.Tensor): Each tensor has shape (nTraj, nStates).
         TestNRMSE_list  (list of torch.Tensor): Each tensor has shape (nTraj, nStates).
         model_names     (list of str): Names of the models, used as plot labels.
+
+    Returns:
+        fig (matplotlib.figure.Figure)
     """
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    axes = axes.flatten()
+    assert len(TrainNRMSE_list) == len(TestNRMSE_list) == len(model_names), \
+        "Train/Test lists and model_names must have the same length."
 
-    # --- Training set (per trajectory curves) ---
-    for train_rmse, name in zip(TrainNRMSE_list, model_names):
-        mean_nrmse = train_rmse.mean(dim=1)   # average across states
-        axes[0].plot(
-            range(train_rmse.shape[0]),
-            mean_nrmse.numpy(),
-            marker='o', linestyle='-', label=name
+    def _to_traj_means(x: torch.Tensor) -> np.ndarray:
+        # x: (nTraj, nStates) -> per-trajectory mean across states -> (nTraj,)
+        if not torch.is_tensor(x):
+            x = torch.as_tensor(x)
+        x = x.detach().cpu()
+        if x.ndim == 1:
+            # already (nTraj,)
+            return x.numpy()
+        if x.ndim != 2:
+            raise ValueError(
+                f"Expected tensor of shape (nTraj, nStates) or (nTraj,), got {tuple(x.shape)}")
+        return x.mean(dim=1).numpy()
+
+    # Prepare data: list of arrays, each array is (nTraj,)
+    train_data = [_to_traj_means(rmse) for rmse in TrainNRMSE_list]
+    test_data = [_to_traj_means(rmse) for rmse in TestNRMSE_list]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+
+    def _boxplot_with_mean(ax, data, title):
+        bp = ax.boxplot(
+            data,
+            labels=model_names,
+            showfliers=True,
+            patch_artist=True,   # allows filled boxes; matplotlib will pick default facecolors
+            widths=0.6
         )
-    axes[0].set_title('Training Metrics (Per Trajectory)')
-    axes[0].set_xlabel("Trajectory Index")
-    axes[0].set_ylabel("Mean NRMSE")
-    axes[0].legend()
-    axes[0].grid()
+        ax.set_title(title)
+        ax.set_ylabel("Mean NRMSE (averaged across states)")
+        ax.grid(axis="y")
 
-    # --- Test set (per trajectory curves) ---
-    for test_rmse, name in zip(TestNRMSE_list, model_names):
-        mean_nrmse = test_rmse.mean(dim=1)   # average across states
-        axes[1].plot(
-            range(test_rmse.shape[0]),
-            mean_nrmse.numpy(),
-            marker='o', linestyle='-', label=name
-        )
-    axes[1].set_title('Test Metrics (Per Trajectory)')
-    axes[1].set_xlabel("Trajectory Index")
-    axes[1].set_ylabel("Mean NRMSE")
-    axes[1].legend()
-    axes[1].grid()
+        # Mean markers (circular)
+        means = np.array(
+            [np.mean(d) if len(d) else np.nan for d in data], dtype=float)
+        x_pos = np.arange(1, len(model_names) + 1)
+        ax.plot(x_pos, means, marker="o", linestyle="None",
+                markersize=6, label="Mean")
 
-    # --- Training set (bar chart: overall average) ---
-    overall_train = [rmse.mean().item() for rmse in TrainNRMSE_list]
-    axes[2].bar(np.arange(len(model_names)),
-                overall_train, tick_label=model_names)
-    axes[2].set_title("Training Metrics (Overall Mean)")
-    axes[2].set_ylabel("Mean NRMSE")
-    axes[2].grid(axis="y")
+        ax.legend(loc="best")
 
-    # --- Test set (bar chart: overall average) ---
-    overall_test = [rmse.mean().item() for rmse in TestNRMSE_list]
-    axes[3].bar(np.arange(len(model_names)),
-                overall_test, tick_label=model_names)
-    axes[3].set_title("Test Metrics (Overall Mean)")
-    axes[3].set_ylabel("Mean NRMSE")
-    axes[3].grid(axis="y")
+        # Optional: rotate labels if long
+        ax.tick_params(axis="x", labelrotation=20)
+
+        return bp
+
+    _boxplot_with_mean(axes[0], train_data,
+                       "Training NRMSE (Boxplot Across Trajectories)")
+    _boxplot_with_mean(axes[1], test_data,
+                       "Test NRMSE (Boxplot Across Trajectories)")
 
     plt.tight_layout()
     return fig

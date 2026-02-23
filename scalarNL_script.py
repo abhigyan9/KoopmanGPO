@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import math
 import time
 from get_iGPK_fcn import get_iGPK
+from get_R3Koopman import get_R3Koopman
 import os
 from datetime import datetime
 
@@ -47,23 +48,6 @@ def _nlpd_one(y, mu, S, jitter=1e-8):
         logdet = torch.log(diag).sum()
         quad = ((y - mu) ** 2 / diag).sum().item()
         return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
-
-
-def _nlpd_vs_time(Xhat, Xcv, GT):
-    """
-    Average NLPD per time-step across trajectories.
-    Xhat: (nTraj, n, N), Xcv: (nTraj, n, n, N), GT: (nTraj, n, N)
-    returns (N,) tensor
-    """
-    nTraj, n, N = Xhat.shape
-    vals = torch.empty(N, dtype=Xhat.dtype)
-    for k in range(N):
-        acc = 0.0
-        for j in range(nTraj):
-            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k],
-                             torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
-        vals[k] = acc / nTraj
-    return vals
 
 
 def _nlpd_per_traj(Xhat, Xcv, GT):
@@ -286,6 +270,70 @@ def plot_calibration_per_state(alphas, empirical_state, state_labels=None, title
     return fig, ax
 
 
+def _save_latex_table(results_dict, outdir, fname_stub: str):
+    """
+    Save LaTeX table with summary stats (min, median, max, mean, std) for each entry in results_dict.
+    Assumes each value is a 1D-ish torch.Tensor / np.ndarray / list of NRMSE values in *decimal*,
+    and converts to percent in the output (x100). Numbers formatted with 2 decimals.
+
+    Parameters
+    ----------
+    results_dict : dict[str, array-like]
+        e.g. {"Poly-eDMD": NRMSE_poly, "RBF-eDMD": NRMSE_rbf, "SSID-GPK": NRMSE_ssid, "iGPK": NRMSE}
+    outdir : str
+        Output directory
+    fname_stub : str
+        Filename stub, e.g. f"{tag}_latex_table" (will write .txt)
+    """
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, f"{fname_stub}.txt")
+
+    def _to_1d_percent_array(x):
+        # torch -> numpy
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+        else:
+            x = np.asarray(x)
+
+        x = np.ravel(x).astype(np.float64)
+        x = x[~np.isnan(x)]  # drop NaNs
+        return 100.0 * x     # decimal -> percent
+
+    def _stats_row(arr):
+        if arr.size == 0:
+            return (np.nan, np.nan, np.nan, np.nan, np.nan)
+        return (np.min(arr), np.median(arr), np.max(arr), np.mean(arr), np.std(arr, ddof=0))
+
+    def _fmt(v):
+        return f"{v:.2f}"
+
+    lines = []
+    lines.append(r"\begin{table}[h]")
+    lines.append(r"\centering")
+    lines.append(r"\begin{tabular}{|l|c|c|c|c|c|}")
+    lines.append(r"\hline")
+    lines.append(
+        r"\textbf{Model} & \textbf{Min (\%)} & \textbf{Median (\%)} & \textbf{Max (\%)} & \textbf{Mean (\%)} & \textbf{Std (\%)} \\")
+    lines.append(r"\hline\hline")
+
+    for name, vals in results_dict.items():
+        arr = _to_1d_percent_array(vals)
+        mn, med, mx, mean, sd = _stats_row(arr)
+        lines.append(
+            rf"{name} & {_fmt(mn)} & {_fmt(med)} & {_fmt(mx)} & {_fmt(mean)} & {_fmt(sd)} \\"
+        )
+        lines.append(r"\hline")
+
+    lines.append(r"\end{tabular}")
+    lines.append(r"\caption{NRMSE summary statistics (in percent).}")
+    lines.append(r"\end{table}")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    return path
+
+
 def run_models_for_noise(
     system_name: str,
     train_frac: float,
@@ -370,12 +418,12 @@ def run_models_for_noise(
         poly_deg = 6
 
     t0 = time.perf_counter()
-    A_poly, C_poly, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
+    _, _, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
         SimData, nTrain, nTest, poly_deg=poly_deg)
     t_poly = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    A_rbf, C_rbf, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf = gpk.eDMD_RBF_kmeans(
+    _, _, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf = gpk.eDMD_RBF_kmeans(
         SimData, nTrain, nTest, num_centers=lifted_order, width=0.2, rbf_type='thin_plate', state_aug=True)
     t_rbf = time.perf_counter() - t0
 
@@ -389,12 +437,26 @@ def run_models_for_noise(
     t_ssid = time.perf_counter() - t0
 
     # unpack SSID-GPK results
-    A_ssid, C_ssid = results_ssid["A"], results_ssid["C"]
-    ObsManager_ssid = results_ssid["ObsManager"]
+    # A_ssid, C_ssid = results_ssid["A"], results_ssid["C"]
+    # ObsManager_ssid = results_ssid["ObsManager"]
     XhatTrain_ssid, XcvhatTrain_ssid, TrainNRMSE_ssid = results_ssid["Train"][
         "Xhat"], results_ssid["Train"]["Xcv"], results_ssid["Train"]["NRMSE"]
     XhatTest_ssid,  XcvhatTest_ssid,  TestNRMSE_ssid = results_ssid["Test"][
         "Xhat"],  results_ssid["Test"]["Xcv"],  results_ssid["Test"]["NRMSE"]
+
+    # 6) Kernel eDMD
+    t0 = time.perf_counter()
+    results_r3k = get_R3Koopman(
+        SimData=SimData,
+        nTrain=nTrain, nTest=nTest,
+        lifting_order=lifted_order)
+    t_r3k = time.perf_counter() - t0
+
+    # unpack Kernel eDMD results
+    XhatTrain_r3k, TrainNRMSE_r3k = results_r3k["Train"][
+        "Xhat"], results_r3k["Train"]["NRMSE"]
+    XhatTest_r3k, TestNRMSE_r3k = results_r3k["Test"][
+        "Xhat"],  results_r3k["Test"]["NRMSE"]
 
     # 6) indices + timebase (not used directly for Scalar NL plotting)
     idx_trainMIN = torch.argmin(TrainNRMSE.mean(dim=1))
@@ -411,7 +473,9 @@ def run_models_for_noise(
         {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
             "test": {"Xhat": XhatTest_rbf}},
         {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid, "Xcvhat": XcvhatTrain_ssid},
-            "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid}}
+            "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid}},
+        {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
+            "test": {"Xhat": XhatTest_r3k}}
     ]
 
     # 8) produce Scalar NL phase-portrait instead of time-series overlays
@@ -527,7 +591,7 @@ def run_models_for_noise(
         # GPKoopman.  We reuse the same plotting logic as the ACC26 script.
         # Note: these calls may be unused in the Scalar NL workflow but are
         # included for completeness if this helper is reused on other systems.
-        y_labels = ['P(t)', 'Q(t)']
+        y_labels = None  # ['P(t)', 'Q(t)']
         for (which, idx, split, sim_offset, suffix) in [
             ("best-train", idx_trainMIN, "train", 0,         "Best_Train"),
             ("best-test",  idx_testMIN,  "test",  nTrain,    "Best_Test"),
@@ -541,23 +605,25 @@ def run_models_for_noise(
                 y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_{which}")
 
-            models_nocv = [
-                {"name": "iGPK", "train": {"Xhat": XhatTrain},
-                    "test": {"Xhat": XhatTest}},
-                {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
-                    "test": {"Xhat": XhatTest_poly}},
-                {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
-                    "test": {"Xhat": XhatTest_rbf}},
-                {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
-                    "test": {"Xhat": XhatTest_ssid}}
-            ]
-            fig, _ = gpk.compare_model_predictions(
-                time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
-                    SimData.shape[2]-1),
-                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-                y_labels=y_labels)
-            _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
+            # models_nocv = [
+            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
+            #         "test": {"Xhat": XhatTest}},
+            #     {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
+            #         "test": {"Xhat": XhatTest_poly}},
+            #     {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
+            #         "test": {"Xhat": XhatTest_rbf}},
+            #     {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
+            #         "test": {"Xhat": XhatTest_ssid}},
+            #     {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
+            #         "test": {"Xhat": XhatTest_r3k}}
+            # ]
+            # fig, _ = gpk.compare_model_predictions(
+            #     time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
+            #         SimData.shape[2]-1),
+            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+            #     y_labels=y_labels)
+            # _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
             models_iGPK = [
                 {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
@@ -600,43 +666,28 @@ def run_models_for_noise(
             XhatTrain, XcvhatTrain, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
         a_te_i, emp_te_i = coverage_curve(
             XhatTest,  XcvhatTest,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
-        fig, _ = plot_calibration_curve(
-            a_tr_i, emp_tr_i, title="iGPK — Train Calibration", label="Empirical")
-        _save(fig, outdir, f"{tag}_Calibration_Curve-Train-iGPK")
-
-        fig, _ = plot_calibration_curve(
-            a_te_i, emp_te_i, title="iGPK — Test Calibration",  label="Empirical")
-        _save(fig, outdir, f"{tag}_Calibration_Curve-Test-iGPK")
-
-        print("iGPK miscalibration area (train/test):",
-              miscalibration_area(a_tr_i, emp_tr_i).item(),
-              miscalibration_area(a_te_i, emp_te_i).item())
+        print(
+            f"iGPK miscalibration area : TRAIN: {miscalibration_area(a_tr_i, emp_tr_i).item():.2e} || TEST: {miscalibration_area(a_te_i, emp_te_i).item():.2e}")
 
         # SSID-GPK
         a_tr_s, emp_tr_s = coverage_curve(
             XhatTrain_ssid, XcvhatTrain_ssid, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
         a_te_s, emp_te_s = coverage_curve(
             XhatTest_ssid,  XcvhatTest_ssid,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
-        fig, _ = plot_calibration_curve(
-            a_tr_s, emp_tr_s, title="SSID-GPK — Train Calibration", label="Empirical")
-        _save(fig, outdir, f"{tag}_Calibration_Curve-Train-SSID_GPK")
-        fig, _ = plot_calibration_curve(
-            a_te_s, emp_te_s, title="SSID-GPK — Test Calibration",  label="Empirical")
-        _save(fig, outdir, f"{tag}_Calibration_Curve-Test-SSID_GPK")
+        print(
+            f"SSID-GPK miscalibration area : TRAIN: {miscalibration_area(a_tr_s, emp_tr_s).item():.2e} || TEST: {miscalibration_area(a_te_s, emp_te_s).item():.2e}")
 
         save_path = os.path.join(outdir, f"{tag}_CalibCurve_Compare.png")
         compare_coverage_curves(a_te_s, emp_te_s, a_te_i, emp_te_i,
                                 system_name="Lorenz", split="test", save_path=save_path)
 
-        print("SSID-GPK miscalibration area (train/test):",
-              miscalibration_area(a_tr_s, emp_tr_s).item(),
-              miscalibration_area(a_te_s, emp_te_s).item())
-
         # c) NRMSE comparison plot
         fig_nrmse = gpk.plot_NRMSE_metrics(
-            [TrainNRMSE, TrainNRMSE_poly, TrainNRMSE_rbf, TrainNRMSE_ssid],
-            [TestNRMSE,  TestNRMSE_poly,  TestNRMSE_rbf, TestNRMSE_ssid],
-            ["iGPK", "Poly-eDMD", "RBF-eDMD", "SSID-GPK"]
+            [TrainNRMSE, TrainNRMSE_poly, TrainNRMSE_rbf,
+                TrainNRMSE_ssid, TrainNRMSE_r3k],
+            [TestNRMSE,  TestNRMSE_poly,  TestNRMSE_rbf,
+                TestNRMSE_ssid, TestNRMSE_r3k],
+            ["iGPK", "Poly-eDMD", "RBF-eDMD", "SSID-GPK", "R3K"]
         )
         _save(fig_nrmse, outdir, f"{tag}_NRMSE_compare")
 
@@ -648,14 +699,6 @@ def run_models_for_noise(
         # Ground-truth slices
         GT_train = SimData[0:nTrain, :, :N-1]         # (nTrain, n, N)
         GT_test = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
-
-        # Curves vs time (mean over trajectories)
-        # nlpd_t_train_igpk  = _nlpd_vs_time(XhatTrain[:,:,:N-1],        XcvhatTrain[:,:,:,:N-1],        GT_train).detach().cpu()
-        nlpd_t_test_igpk = _nlpd_vs_time(
-            XhatTest[:, :, :N-1],         XcvhatTest[:, :, :, :N-1],         GT_test).detach().cpu()
-        # nlpd_t_train_ssid  = _nlpd_vs_time(XhatTrain_ssid[:,:,:N-1],   XcvhatTrain_ssid[:,:,:,:N-1],   GT_train).detach().cpu()
-        nlpd_t_test_ssid = _nlpd_vs_time(
-            XhatTest_ssid[:, :, :N-1],    XcvhatTest_ssid[:, :, :, :N-1],    GT_test).detach().cpu()
 
         # Per-trajectory NLPD statistics (mean ± std across trajectories)
         # nlpd_traj_train_igpk = _nlpd_per_traj(XhatTrain[:,:,:N-1],      XcvhatTrain[:,:,:,:N-1],      GT_train).detach().cpu()
@@ -675,38 +718,27 @@ def run_models_for_noise(
         m, s = _ms(nlpd_traj_test_ssid)
         print(f"Test  NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
 
-        # Plots: NLPD vs time-step (Train)
-        # figN1, axN1 = plt.subplots(figsize=(6.5, 5))
-        # k_axis = np.arange(nlpd_t_train_igpk.numel())
-        # axN1.plot(k_axis, nlpd_t_train_igpk.numpy(),  label="iGPK (Train)")
-        # axN1.plot(k_axis, nlpd_t_train_ssid.numpy(),  label="SSID-GPK (Train)")
-        # axN1.set_xlabel("Time step ($k$)")
-        # axN1.set_ylabel("NLPD")
-        # axN1.grid(True); axN1.legend()
-        # _save(figN1, outdir, f"{tag}_NLPD_vs_time_train")
-        # plt.close(figN1)
-
-        # Plots: NLPD vs time-step (Test)
-        figN2, axN2 = plt.subplots(figsize=(6, 5))
-        k_axis = np.arange(nlpd_t_test_igpk.numel())
-        axN2.plot(k_axis, nlpd_t_test_igpk.numpy(),   label="iGPK (Test)")
-        axN2.plot(k_axis, nlpd_t_test_ssid.numpy(),   label="SSID-GPK (Test)")
-        axN2.set_xlabel("Time step ($k$)")
-        axN2.set_ylabel("NLPD")
-        axN2.grid(True)
-        axN2.legend()
-        _save(figN2, outdir, f"{tag}_NLPD_vs_time_test")
-        plt.close(figN2)
-
     # Compute aggregate NRMSE metrics for reporting.  Use the mean over all
     # dimensions and trajectories for each model.  These values are stored in
     # the return dictionary under the "NRMSE" key.
-    nrmse_summary = {
-        "iGPK": float(TestNRMSE.mean()),
-        "Poly-eDMD": float(TestNRMSE_poly.mean()),
-        "RBF-eDMD": float(TestNRMSE_rbf.mean()),
-        "SSID-GPK": float(TestNRMSE_ssid.mean()),
+    train_nrmse = {
+        "Poly-eDMD": TrainNRMSE_poly,
+        "RBF-eDMD": TrainNRMSE_rbf,
+        "R3-K": TrainNRMSE_r3k,
+        "SSID-GPK": TrainNRMSE_ssid,
+        "iGPK": TrainNRMSE,
     }
+    test_nrmse = {
+        "Poly-eDMD": TestNRMSE_poly,
+        "RBF-eDMD": TestNRMSE_rbf,
+        "R3-K": TestNRMSE_r3k,
+        "SSID-GPK": TestNRMSE_ssid,
+        "iGPK": TestNRMSE,
+    }
+
+    _save_latex_table(train_nrmse, outdir, f"{tag}_latex_table_train")
+    _save_latex_table(test_nrmse, outdir, f"{tag}_latex_table_test")
+
     print(f'========================================================')
     print(
         f'Train NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
@@ -719,6 +751,8 @@ def run_models_for_noise(
         f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} \u00B1 {(TrainNRMSE_rbf*100).std():.2f} %')
     print(
         f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} \u00B1 {(TrainNRMSE_ssid*100).std():.2f} %')
+    print(
+        f'Train NRMSE R3-K      = {TrainNRMSE_r3k.mean()*100:.2f} \u00B1 {(TrainNRMSE_r3k*100).std():.2f} %')
     print(f'========================================================')
     print(
         f'Test NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
@@ -731,15 +765,18 @@ def run_models_for_noise(
         f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} \u00B1 {(TestNRMSE_rbf*100).std():.2f} %')
     print(
         f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} \u00B1 {(TestNRMSE_ssid*100).std():.2f} %')
-    print(f'========================================================')
-    print(f'========================================================')
     print(
-        f'Computation Times for {lifted_order}-D model with {iters_list[1]} BO-samples, {iters_list[2]} BO-iters and {iters_list[3]} GD-steps')
+        f'Test NRMSE R3-K      = {TestNRMSE_r3k.mean()*100:.2f} \u00B1 {(TestNRMSE_r3k*100).std():.2f} %')
+    print(f'========================================================')
+    print(f'========================================================')
+    # print(
+    # f'Computation Times for {lifted_order}-D model with {iters_list[1]} BO-samples, {iters_list[2]} BO-iters and {iters_list[3]} GD-steps')
     print(f'========================================================')
     print(f'Computation Time iGPK       = {t_iGPK:.2f} seconds')
     print(f'Computation Time Poly-eDMD  = {t_poly:.2f} seconds')
     print(f'Computation Time RBF-eDMD   = {t_rbf:.2f} seconds')
     print(f'Computation Time SSID-GPK   = {t_ssid:.2f} seconds')
+    print(f'Computation Time R3Koopman  = {t_r3k:.2f} seconds')
     print(f'========================================================')
     print(f'========================================================')
 
@@ -749,11 +786,10 @@ def run_models_for_noise(
     # Return bundle
     return {
         "timings": {"iGPK": t_iGPK, "Poly-eDMD": t_poly, "RBF-eDMD": t_rbf, "SSID-GPK": t_ssid},
-        "orders":  {"iGPK": C_igpk.shape[1], "Poly-eDMD": C_poly.shape[1], "RBF-eDMD": C_rbf.shape[1], "SSID-GPK": C_ssid.shape[1]},
-        "splits":  {"nTrain": nTrain, "nTest": nTest},
         "tag": tag,
         "outdir": outdir,
-        "NRMSE": nrmse_summary
+        "Train-NRMSE": train_nrmse,
+        "Test-NRMSE": test_nrmse,
     }
 
 

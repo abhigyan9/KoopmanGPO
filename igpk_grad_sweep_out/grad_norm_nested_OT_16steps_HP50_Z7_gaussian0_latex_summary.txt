@@ -1,0 +1,24 @@
+\begin{table}[h]
+\centering
+\begin{tabular}{|p{4.0cm}|p{4.0cm}|c|c|c|c|c|}
+\hline
+\textbf{Quantity} & \textbf{Expression} & \textbf{Min} & \textbf{Median} & \textbf{Max} & \textbf{Mean} & \textbf{S.D.} \\
+\hline\hline
+Cost & $\mathcal{L}$ & 1.22e+02 & 1.25e+02 & 1.28e+02 & 1.25e+02 & 1.03e+00 \\
+\hline
+Frobenius norm of the calculated gradient & $\|\nabla_{Z}\mathcal{L}\|_{\mathrm{F}}$ & 4.03e+00 & 5.59e+00 & 7.59e+00 & 5.56e+00 & 6.13e-01 \\
+\hline
+Calculated analytical bound (Lipschitz constant) & $L_{\mathcal{Z}}$ & 2.21e+10 & 4.73e+10 & 1.29e+11 & 5.00e+10 & 1.55e+10 \\
+\hline
+Condition number of $\bar{\Phi}\bar{\Phi}^{\top}$ & $\kappa(\bar{\Phi}\bar{\Phi}^{\top})=\kappa(MM^{\top})$ & 2.78e+02 & 3.70e+02 & 5.23e+02 & 3.71e+02 & 3.83e+01 \\
+\hline
+Condition number of $\bar{\Phi}(X)$ & $\kappa(\bar{\Phi}(X))=\kappa(M)$ & 1.67e+01 & 1.92e+01 & 2.29e+01 & 1.92e+01 & 9.82e-01 \\
+\hline
+Condition number of $\bar{\Phi}(X^+)$ & $\kappa(\bar{\Phi}(X^{+}))=\kappa(M^{+})$ & 3.73e+02 & 1.10e+03 & 8.18e+03 & 1.59e+03 & 1.33e+03 \\
+\hline
+$\gamma_1=\|\bar{\Phi}(X)\|_{\mathrm{F}}$ & $\gamma_{1}$ & 4.83e+01 & 5.01e+01 & 5.24e+01 & 5.02e+01 & 7.50e-01 \\
+\hline
+$\gamma_2=\|\bar{\Phi}(X^+)\|_{\mathrm{F}}$ & $\gamma_{2}$ & 4.20e+01 & 4.41e+01 & 4.63e+01 & 4.41e+01 & 8.21e-01 \\
+\hline
+\end{tabular}
+\end{table}
