@@ -432,7 +432,7 @@ def get_iGPK(
 
     if routine == "Z_only":
         optimizer = torch.optim.SGD(
-            [Z], lr=learn_rate, momentum=0.75, nesterov=True)
+            [Z], lr=learn_rate, momentum=0.7, nesterov=True)
         while iter < max_iter:
             optimizer.zero_grad()
             cost = get_cost_simple(Z, X, Xplus, ObsManager,

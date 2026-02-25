@@ -351,7 +351,8 @@ def run_models_for_noise(
     train_method: str = "Horizon",
     device: str = "cuda:0",
     # saving
-    outdir: str = "Figures"
+    outdir: str = "Figures",
+    normalizeData=None
 ):
     """
     Train a suite of Koopman models on noisy simulation data and produce
@@ -367,7 +368,7 @@ def run_models_for_noise(
         system_name, train_frac, test_frac, clip=clip)
 
     # For Scalar NL we avoid normalisation to preserve interpretability
-    if system_name.lower().startswith("vec"):
+    if normalizeData is None:
         SimData_clean = SimData_raw
     else:
         SimData_clean, mu_vec, std_vec = gpk.normalize_data(
@@ -605,25 +606,25 @@ def run_models_for_noise(
                 y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_{which}")
 
-            # models_nocv = [
-            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
-            #         "test": {"Xhat": XhatTest}},
-            #     {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
-            #         "test": {"Xhat": XhatTest_poly}},
-            #     {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
-            #         "test": {"Xhat": XhatTest_rbf}},
-            #     {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
-            #         "test": {"Xhat": XhatTest_ssid}},
-            #     {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
-            #         "test": {"Xhat": XhatTest_r3k}}
-            # ]
-            # fig, _ = gpk.compare_model_predictions(
-            #     time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
-            #         SimData.shape[2]-1),
-            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-            #     y_labels=y_labels)
-            # _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
+            models_nocv = [
+                {"name": "iGPK", "train": {"Xhat": XhatTrain},
+                    "test": {"Xhat": XhatTest}},
+                {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
+                    "test": {"Xhat": XhatTest_poly}},
+                {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
+                    "test": {"Xhat": XhatTest_rbf}},
+                {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
+                    "test": {"Xhat": XhatTest_ssid}},
+                {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
+                    "test": {"Xhat": XhatTest_r3k}}
+            ]
+            fig, _ = gpk.compare_model_predictions(
+                time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
+                    SimData.shape[2]-1),
+                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
+            _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
             models_iGPK = [
                 {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},

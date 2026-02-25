@@ -118,7 +118,7 @@ def _boxplot_by_intensity(
     plt.figure(figsize=(10, 4.5))
     plt.boxplot(
         data,
-        labels=[f"{i:g}" for i in intensities],
+        tick_labels=[f"{i:g}" for i in intensities],
         showfliers=False,
         whis=(5, 95),
     )
@@ -129,6 +129,39 @@ def _boxplot_by_intensity(
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
     plt.close()
+
+
+def _extract_gp_noise_stats(obs_manager) -> Tuple[List[float], float, float, float, float, float]:
+    """Extract learned GP noise hyperparameters from an ObsManager (GPObservablesManager).
+
+    Returns:
+        noise_vals: list of learned noise scalars (flattened across observables)
+        mean, median, std, min, max: aggregate stats (NaN if empty)
+    """
+    noise_vals: List[float] = []
+    if obs_manager is None:
+        return noise_vals, float("nan"), float("nan"), float("nan"), float("nan"), float("nan")
+
+    # Prefer the manager API
+    params_all = obs_manager.get_all_params()
+    for _, pd in params_all.items():
+        nv = pd.get("noise")
+        if isinstance(nv, torch.Tensor):
+            nv = _to_cpu(nv).reshape(-1)
+            noise_vals.extend([float(x.item()) for x in nv])
+        else:
+            noise_vals.append(float(nv))
+
+    if len(noise_vals) == 0:
+        return noise_vals, float("nan"), float("nan"), float("nan"), float("nan"), float("nan")
+
+    t = torch.tensor(noise_vals, dtype=torch.float64)
+    mean = float(t.mean().item())
+    median = float(t.median().item())
+    std = float(t.std(unbiased=False).item()) if t.numel() > 1 else 0.0
+    minv = float(t.min().item())
+    maxv = float(t.max().item())
+    return noise_vals, mean, median, std, minv, maxv
 
 
 def _match_eigs(prev: List[complex], curr: List[complex]) -> List[int]:
@@ -192,11 +225,11 @@ if __name__ == "__main__":
     # ---------------------------
     # User config
     # ---------------------------
-    SYSTEM_NAME = "Inhibited Predator-Prey"  # change as needed
+    SYSTEM_NAME = "Cart_data"  # change as needed
     TRAIN_FRAC = 0.6
     TEST_FRAC = 1 - TRAIN_FRAC
     CLIP = None
-    LIFTED_ORDER = 10
+    LIFTED_ORDER = 20
 
     NOISE_TYPES = ["gaussian"]
     INTENSITIES = [0.0, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2]
@@ -207,7 +240,7 @@ if __name__ == "__main__":
     # ---------------------------
     # Output config
     # ---------------------------
-    OUTDIR = "Figures/PERTURBATION_ANALYSIS_OUT"
+    OUTDIR = f"Figures/Perturbation_Analysis/{SYSTEM_NAME}"
     _ensure_dir(OUTDIR)
 
     SYS = _slug(SYSTEM_NAME)
@@ -239,6 +272,14 @@ if __name__ == "__main__":
     # nrmse_db[noise_type][intensity]["train"|"test"] -> list of floats
     nrmse_db: Dict[str, Dict[float, Dict[str, List[float]]]] = {}
 
+    # Cost histories
+    # cost_db[noise_type][intensity] -> list of cost history lists (one per seed)
+    cost_db: Dict[str, Dict[float, List[List[float]]]] = {}
+
+    # Learned GP noise values (flattened across observables)
+    # gpnoise_db[noise_type][intensity] -> list of learned noise scalars (across seeds)
+    gpnoise_db: Dict[str, Dict[float, List[float]]] = {}
+
     for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, SEEDS):
         # Avoid duplicate zero-noise runs across noise types
         if intensity == 0.0 and noise_type != "gaussian":
@@ -256,8 +297,8 @@ if __name__ == "__main__":
             nTrain=nTrain,
             nTest=nTest,
             lifting_order=LIFTED_ORDER,
-            iters_list=list((0, 32, 16, 500)),
-            learn_rate=0.04,
+            iters_list=list((0, 32, 16, 1000)),
+            learn_rate=0.01,
             opt_weights=list((1.0, 1.0, 1.0)),
             routine="Z_only",
             train_method="Horizon",
@@ -266,6 +307,24 @@ if __name__ == "__main__":
 
         A = results["A"]
         C = results["C"]
+
+        # Cost history: 1D tensor (n_iters,)
+        cost_hist_t = results.get("history", {}).get("cost", None)
+        final_cost = float("nan")
+        cost_hist = None
+        if isinstance(cost_hist_t, torch.Tensor) and cost_hist_t.numel() > 0:
+            cost_hist = _to_cpu(cost_hist_t).reshape(-1).double()
+            final_cost = float(cost_hist[-1].item())
+            cost_db.setdefault(noise_type, {}).setdefault(
+                float(intensity), []).append([float(x) for x in cost_hist.tolist()])
+
+        # Learned GP noise hyperparameters (per observable)
+        obs_manager = results.get("ObsManager", None)
+        gp_noise_vals, gp_noise_mean, gp_noise_median, gp_noise_std, gp_noise_min, gp_noise_max = _extract_gp_noise_stats(
+            obs_manager)
+        if len(gp_noise_vals) > 0:
+            gpnoise_db.setdefault(noise_type, {}).setdefault(
+                float(intensity), []).extend(gp_noise_vals)
 
         # NRMSE: (nTraj, nState). We'll flatten to a single distribution.
         TrainNRMSE = results.get("Train", {}).get("NRMSE", None)
@@ -308,6 +367,13 @@ if __name__ == "__main__":
             noise_type,
             float(intensity),
             int(seed),
+            final_cost,
+            gp_noise_mean,
+            gp_noise_median,
+            gp_noise_std,
+            gp_noise_min,
+            gp_noise_max,
+            len(gp_noise_vals),
             froA,
             float("nan"),  # rel_change_froA (filled after baseline computed)
             condA,
@@ -399,6 +465,13 @@ if __name__ == "__main__":
             "noise_type",
             "intensity",
             "seed",
+            "final_cost",
+            "gp_noise_mean",
+            "gp_noise_median",
+            "gp_noise_std",
+            "gp_noise_min",
+            "gp_noise_max",
+            "gp_noise_n",
             "froA",
             "rel_change_froA",
             "condA",
@@ -586,3 +659,76 @@ if __name__ == "__main__":
     print("\nAll outputs written to:", os.path.abspath(OUTDIR))
     if not _HAS_SCIPY:
         print("[NOTE] scipy not found; mode tracking used greedy assignment fallback.")
+
+# --- Learned GP noise hyperparameter plots ---
+try:
+    if noise_type in gpnoise_db and len(gpnoise_db[noise_type]) > 0:
+        gp_by = {i: gpnoise_db[noise_type].get(i, []) for i in intens_sorted}
+        _boxplot_by_intensity(
+            os.path.join(OUTDIR, f"{SYS}_{noise_type}_GPNoise_box.png"),
+            f"{SYSTEM_NAME} | {noise_type} | Learned GP noise vs intensity",
+            intens_sorted,
+            gp_by,
+            "Learned GP noise",
+        )
+
+        means = []
+        for i in intens_sorted:
+            vals = gp_by.get(i, [])
+            means.append(float(torch.tensor(vals, dtype=torch.float64).mean().item()) if len(
+                vals) else float("nan"))
+
+        plt.figure()
+        plt.plot(intens_sorted, means, marker="o",
+                 label="Mean learned GP noise")
+        plt.plot(intens_sorted, intens_sorted,
+                 linestyle="--", label="Injected noise (y=x)")
+        plt.xlabel("Noise intensity")
+        plt.ylabel("Noise")
+        plt.title(
+            f"{SYSTEM_NAME} | {noise_type} | Mean learned GP noise vs injected noise")
+        plt.grid(True, which="both", alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(
+                OUTDIR, f"{SYS}_{noise_type}_GPNoise_mean_vs_injected.png"),
+            dpi=200,
+        )
+        plt.close()
+except Exception as e:
+    print(
+        f"[WARN] Plotting learned GP noise figures failed for {noise_type}: {e}")
+
+# --- Cost history plot (log y) across noise intensities ---
+try:
+    if noise_type in cost_db and len(cost_db[noise_type]) > 0:
+        plt.figure()
+        for inten in intens_sorted:
+            hist_list = cost_db[noise_type].get(float(inten), [])
+            if not hist_list:
+                continue
+            maxlen = max(len(h) for h in hist_list)
+            H = torch.full((len(hist_list), maxlen),
+                           float("nan"), dtype=torch.float64)
+            for r, h in enumerate(hist_list):
+                H[r, :len(h)] = torch.tensor(h, dtype=torch.float64)
+            mean_hist = torch.nanmean(H, dim=0).numpy()
+            plt.plot(range(len(mean_hist)), mean_hist,
+                     label=f"intensity={inten:g}")
+
+        plt.yscale("log")
+        plt.xlabel("Iteration")
+        plt.ylabel("Cost")
+        plt.title(
+            f"{SYSTEM_NAME} | {noise_type} | Cost history (mean over seeds)")
+        plt.grid(True, which="both", alpha=0.3)
+        plt.legend(fontsize=8, ncols=2)
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(OUTDIR, f"{SYS}_{noise_type}_cost_history_log.png"),
+            dpi=200,
+        )
+        plt.close()
+except Exception as e:
+    print(f"[WARN] Plotting cost history figure failed for {noise_type}: {e}")
