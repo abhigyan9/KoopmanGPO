@@ -219,21 +219,23 @@ def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
             data,
             labels=model_names,
             showfliers=True,
-            patch_artist=True,   # allows filled boxes; matplotlib will pick default facecolors
-            widths=0.6
+            patch_artist=False,   # allows filled boxes; matplotlib will pick default facecolors
+            widths=0.6,
+            showmeans=True,
+            meanline=True
         )
         ax.set_title(title)
         ax.set_ylabel("Mean NRMSE (averaged across states)")
         ax.grid(axis="y")
 
-        # Mean markers (circular)
-        means = np.array(
-            [np.mean(d) if len(d) else np.nan for d in data], dtype=float)
-        x_pos = np.arange(1, len(model_names) + 1)
-        ax.plot(x_pos, means, marker="o", linestyle="None",
-                markersize=6, label="Mean")
+        # # Mean markers (circular)
+        # means = np.array(
+        #     [np.mean(d) if len(d) else np.nan for d in data], dtype=float)
+        # x_pos = np.arange(1, len(model_names) + 1)
+        # ax.plot(x_pos, means, marker="D", linestyle="None",
+        #         markersize=6, label="Mean")
 
-        ax.legend(loc="best")
+        # ax.legend(loc="best")
 
         # Optional: rotate labels if long
         ax.tick_params(axis="x", labelrotation=20)

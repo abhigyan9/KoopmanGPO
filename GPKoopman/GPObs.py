@@ -672,8 +672,8 @@ class GPObservablesManager:
 
             if scale_hp2 is not None:
                 obs.hp2_list = nn.ParameterList([
-                    nn.Parameter(scale_hp2 * torch.rand(1,
-                                                        device=obs.device, requires_grad=True))
+                    nn.Parameter(scale_hp2 * (0.5 + torch.rand(1,
+                                                               device=obs.device, requires_grad=True)))
                     for _ in range(num_kernels)
                 ])
 

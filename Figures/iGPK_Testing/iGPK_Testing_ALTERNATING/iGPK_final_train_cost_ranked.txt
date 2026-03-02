@@ -1,0 +1,13 @@
+tag	final_train_cost	A_path
+run-  1_seed-  1	1.594699e+01	None
+run-  2_seed-  3	2.396340e+01	None
+run-  3_seed-  5	1.462962e+01	None
+run-  4_seed- 11	2.379630e+01	None
+run-  5_seed- 17	2.104421e+01	None
+run-  6_seed- 20	1.621716e+01	None
+run-  7_seed- 21	2.327969e+01	None
+run-  8_seed- 24	9.423656e+00	None
+run-  9_seed- 50	1.736903e+01	None
+run- 10_seed-101	2.764885e+01	None
+run- 11_seed-140	1.014402e+01	None
+run- 12_seed-142	1.247480e+01	None
