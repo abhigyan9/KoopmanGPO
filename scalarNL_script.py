@@ -395,7 +395,7 @@ def run_models_for_noise(
         opt_weights=list(opt_weights),
         routine=routine,
         train_method=train_method,
-        kernel_hp_scale=kernel_hp_scale,
+        hp_scale=kernel_hp_scale,
         device=device,
     )
     t_iGPK = time.perf_counter() - t0
