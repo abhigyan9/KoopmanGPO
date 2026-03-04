@@ -217,12 +217,12 @@ if __name__ == "__main__":
     iters_list = [0, 0, 0, 500]
     learn_rate = 0.001
     opt_weights = [1., 1., 1.]
-    routine = "alternating"
+    routine = "Z-only"
     train_method = "Horizon"
     device = "cuda:0"
 
-    OUTDIR = "Figures/iGPK_Testing/Alternating"
-    hp_seeds, z_seeds = [1, 3, 7, 8, 40], [11, 13, 14, 21, 33]
+    OUTDIR = f"Figures/iGPK_Seed_Sensitivity/{routine}"
+    hp_seeds, z_seeds = [1, 3, 7, 8, 40, 59, 61], [11, 13, 14, 21, 33, 43, 53]
     os.makedirs(OUTDIR, exist_ok=True)
 
     # 1.1) Load and Normalize Data
