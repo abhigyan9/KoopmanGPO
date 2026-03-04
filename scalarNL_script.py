@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import time
-from get_iGPK_fcn import get_iGPK
+from get_iGPK_new import get_iGPK
 from get_R3Koopman import get_R3Koopman
 import os
 from datetime import datetime
@@ -342,17 +342,18 @@ def run_models_for_noise(
     noise_type: str,
     intensity: float,
     seed: int,
+    outdir: str = "Figures",
+    normalizeData: bool = True,
     # modeling knobs
     lifted_order: int = 10,
-    iters_list=(250, 50, 50, 100),
-    learn_rate: float = 0.04,
-    opt_weights=(10.0, 1.0, 10.0),
+    poly_deg: int = 3,
+    max_iter: int = 1000,
+    learn_rate: float = 0.01,
+    kernel_hp_scale: list[float | None] = [None, 1.0, None],
+    opt_weights: list[float] = [1.0, 1.0, 1.0],
     routine: str = "Z_only",
     train_method: str = "Horizon",
     device: str = "cuda:0",
-    # saving
-    outdir: str = "Figures",
-    normalizeData=None
 ):
     """
     Train a suite of Koopman models on noisy simulation data and produce
@@ -367,12 +368,12 @@ def run_models_for_noise(
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
 
-    # For Scalar NL we avoid normalisation to preserve interpretability
-    if normalizeData is None:
-        SimData_clean = SimData_raw
-    else:
+    if normalizeData:
         SimData_clean, mu_vec, std_vec = gpk.normalize_data(
             SimData_raw, nTrain, N)
+    else:
+        SimData_clean = SimData_raw
+
     # 2) Noise
     SimData = gpk.add_noise(SimData_clean, noise_type=noise_type,
                             intensity=intensity, seed=seed)
@@ -389,12 +390,13 @@ def run_models_for_noise(
         SimData=SimData,
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
-        iters_list=list(iters_list),
+        max_iter=max_iter,
         learn_rate=learn_rate,
         opt_weights=list(opt_weights),
         routine=routine,
         train_method=train_method,
-        device=device
+        kernel_hp_scale=kernel_hp_scale,
+        device=device,
     )
     t_iGPK = time.perf_counter() - t0
 
@@ -407,17 +409,6 @@ def run_models_for_noise(
         "Xhat"],  results["Test"]["Xcv"],  results["Test"]["NRMSE"]
 
     # 4) eDMDs
-    if lifted_order <= 6:
-        poly_deg = 2
-    elif lifted_order <= 10:
-        poly_deg = 3
-    elif lifted_order <= 15:
-        poly_deg = 4
-    elif lifted_order <= 21:
-        poly_deg = 5
-    else:
-        poly_deg = 6
-
     t0 = time.perf_counter()
     _, _, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
         SimData, nTrain, nTest, poly_deg=poly_deg)
@@ -425,7 +416,8 @@ def run_models_for_noise(
 
     t0 = time.perf_counter()
     _, _, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf = gpk.eDMD_RBF_kmeans(
-        SimData, nTrain, nTest, num_centers=lifted_order, width=0.2, rbf_type='thin_plate', state_aug=True)
+        SimData, nTrain, nTest, num_centers=lifted_order, width=kernel_hp_scale[1],
+        rbf_type='gaussian', state_aug=True)
     t_rbf = time.perf_counter() - t0
 
     # 5) SSID-GPK

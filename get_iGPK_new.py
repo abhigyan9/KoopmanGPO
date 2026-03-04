@@ -65,15 +65,13 @@ def get_cost_simple(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda
 def get_iGPK(
     SimData: torch.tensor,          # (num_traj, n, N+1)
     nTrain: int, nTest: int,
-    lifting_order: int,
-    # [max_iter, (optional phase_len_hp), (optional phase_len_z), (optional reserve_final_z)]
-    iters_list: list[float],
-    learn_rate: float,
-    # [lambda1, lambda2, lambda3]
+    lifting_order: int = 10,
+    max_iter: int = 100,
+    learn_rate: float = 0.01,
     opt_weights: list[float] = [1., 1., 1.],
     routine: str = "Z_only",        # "Z_only" or "SpacedOpt"
     train_method: str = "Horizon",  # "Horizon" or "K-Means"
-    hp_scale: list = [1.0, 1.0, None],  # [hp1, hp2, mu]
+    hp_scale: list = [None, 1.0, None],  # [hp1, hp2, mu]
     device: str = "cuda:0",
     seed_z: int = 1234,
     seed_hp: int = 1234
@@ -144,7 +142,6 @@ def get_iGPK(
         raise ValueError(f"Unrecognized train_method: {train_method}")
 
     # === Optimization ===
-    max_iter = iters_list[3]
     lam1, lam2, _ = opt_weights
     iter = 0
     cost_history = []
@@ -165,22 +162,6 @@ def get_iGPK(
             ObsManager.optimize_hyperparameters(
                 opt_mu=False, opt_sigma=True, max_iter=hp_opt_iter, lr=learn_rate)
             num_hpopt += 1
-
-    # Plot Cost History
-    fig, ax1 = plt.subplots()
-    color = 'tab:blue'
-    ax1.set_xlabel('Iteration')
-    ax1.set_ylabel('log(Cost)', color=color)
-    ax1.plot(torch.log10(torch.abs(torch.tensor(cost_history))), color=color)
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid(True, which='both', linestyle='--', alpha=0.7)
-    ax2 = ax1.twinx()
-    color = 'tab:red'
-    ax2.set_ylabel('Cost', color=color)
-    ax2.plot(cost_history, color=color)
-    ax2.tick_params(axis='y', labelcolor=color)
-    fig.tight_layout()
-    plt.close(fig)
 
     # === Retrain GPs at optimal Z & (optionally) optimize hp ===
     optimal_Z = Z.detach()
@@ -312,7 +293,6 @@ if __name__ == "__main__":
     t_iGPK = time.perf_counter() - t0
     print(
         f'{lifted_order}-D iGPK model identification with {iters_list[3]}-iterations, finished in {t_iGPK:.2f} seconds')
-    plt.show()
 
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
@@ -351,3 +331,20 @@ if __name__ == "__main__":
         )
 
     plt.show()
+
+    cost_history = results["history"].get("cost", None)
+    # Plot Cost History
+    fig, ax1 = plt.subplots()
+    color = 'tab:blue'
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('log(Cost)', color=color)
+    ax1.plot(torch.log10(torch.abs(torch.tensor(cost_history))), color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.grid(True, which='both', linestyle='--', alpha=0.7)
+    ax2 = ax1.twinx()
+    color = 'tab:red'
+    ax2.set_ylabel('Cost', color=color)
+    ax2.plot(cost_history, color=color)
+    ax2.tick_params(axis='y', labelcolor=color)
+    fig.tight_layout()
+    plt.close(fig)

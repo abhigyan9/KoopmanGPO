@@ -3,6 +3,8 @@ import itertools
 from scalarNL_script import run_models_for_noise
 import torch
 import numpy as np
+import argparse
+import GPKoopman as gpk
 
 # --------- #
 ## HELPERS ##
@@ -61,22 +63,79 @@ def find_hp_init(SimData: torch.tensor, nTrain: int) -> float:
         return hp_init
 
 
-## [0] SYSTEM CONFIGURATION ##
-SYSTEM_NAME = "Lorenz"   # change as needed
+# -------------------------------------------------
+# Parse command-line arguments
+# -------------------------------------------------
+parser = argparse.ArgumentParser(
+    description="Run Koopman experiments with configurable noise.")
+
+parser.add_argument("--system", type=str, default="Lorenz",
+                    help="System name (e.g., Lorenz, Cart_data, etc.)")
+
+parser.add_argument("--noise_types", nargs="+", default=["gaussian"],
+                    help="Noise types (space separated)")
+
+parser.add_argument("--intensities", nargs="+", type=float,
+                    default=[0.0],
+                    help="Noise intensities (space separated)")
+
+parser.add_argument("--lifted_order", nargs="+", type=int,
+                    default=[5],
+                    help="Lifted System Order")
+
+parser.add_argument("--poly_deg", nargs="+", type=int,
+                    default=[3],
+                    help="Order of Polynomials for poly-eDMD")
+
+parser.add_argument("--max_iter", nargs="+", type=int,
+                    default=[2000],
+                    help="Maximum Iterations for iGPK")
+
+parser.add_argument("--learn_rate", nargs="+", type=float,
+                    default=[0.001],
+                    help="")
+
+args = parser.parse_args()
+
+# -------------------------------------------------
+# Configuration from CLI
+# -------------------------------------------------
+SYSTEM_NAME = args.system
+NOISE_TYPES = args.noise_types
+INTENSITIES = args.intensities
+LIFTED_ORDER = args.lifted_order
+POLY_DEG = args.poly_deg
+MAX_ITER = args.max_iter
+LEARN_RATE = args.learn_rate
+
 TRAIN_FRAC = 0.60
 TEST_FRAC = 1 - TRAIN_FRAC
-CLIP = 150                 # or None
+CLIP = None
+NORMALIZE_DATA = True
 
-NOISE_TYPES = ["gaussian"]
+SEEDS = [100]
 
-INTENSITIES = [0., 0.05, 0.1]  # normalized scale
-SEEDS = [100]                      # repeatability / variability
+OUTDIR = "Figures/Journal/" + SYSTEM_NAME
 
-OUTDIR = "Figures/Trial_15D_" + SYSTEM_NAME
+# Find Scale of Hyperparameter Initialization
+SimData_raw, _, _, N, nTrain, _ = gpk.load_SimData(
+    SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
 
+if NORMALIZE_DATA:
+    SimData, _, _ = gpk.normalize_data(
+        SimData_raw, nTrain, N)
+else:
+    SimData_clean = SimData_raw
+
+hp_scale = find_hp_init(SimData, nTrain)
+
+# -------------------------------------------------
+# Run experiments
+# -------------------------------------------------
 for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, SEEDS):
+
     if intensity == 0.0 and noise_type != "gaussian":
-        continue   # skip duplicates at zero noise
+        continue  # skip duplicates at zero noise
 
     print(f"\n=== {noise_type} | intensity={intensity:.3f} | seed={seed} ===")
 
@@ -88,14 +147,11 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         noise_type=noise_type,
         intensity=intensity,
         seed=seed,
-        # (tweak model knobs if desired)
-        lifted_order=15,
-        iters_list=(0, 32, 16, 600),
-        learn_rate=0.001,
-        opt_weights=(1.0, 1.0, 1.0),
-        routine="Z_only",
-        train_method="Horizon",
-        device="cuda:0",
         outdir=OUTDIR,
-        normalizeData=1
+        normalizeData=NORMALIZE_DATA,
+        lifted_order=LIFTED_ORDER,
+        poly_deg=POLY_DEG,
+        max_iter=MAX_ITER,
+        learn_rate=LEARN_RATE,
+        kernel_hp_scale=[None, hp_scale, None],
     )
