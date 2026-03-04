@@ -80,19 +80,19 @@ parser.add_argument("--intensities", nargs="+", type=float,
                     help="Noise intensities (space separated)")
 
 parser.add_argument("--lifted_order", nargs="+", type=int,
-                    default=[5],
+                    default=5,
                     help="Lifted System Order")
 
 parser.add_argument("--poly_deg", nargs="+", type=int,
-                    default=[3],
+                    default=3,
                     help="Order of Polynomials for poly-eDMD")
 
 parser.add_argument("--max_iter", nargs="+", type=int,
-                    default=[2000],
+                    default=2000,
                     help="Maximum Iterations for iGPK")
 
 parser.add_argument("--learn_rate", nargs="+", type=float,
-                    default=[0.001],
+                    default=0.001,
                     help="")
 
 args = parser.parse_args()
