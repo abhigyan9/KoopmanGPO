@@ -1,0 +1,46 @@
+(gpk312) PS C:\Users\abhig\gpkoopman\KoopmanGPO> python .\sweep_noise_ipp.py --system "OT_48steps" --noise_types gaussian --intensities 0. --lifted_order 45 --poly_deg 2 --max_iter 2500 --learn_rate 0.01                                   
+
+=== gaussian | intensity=0.000 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 48 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [85.15625  89.947914 76.82292  66.71875  65.989586 64.791664 38.541664
+ 42.083332]
+  95% interval: [88.90625  92.44792  82.604164 74.0625   72.8125   71.5625   44.84375
+ 46.302082]
+
+Test coverage (per state):
+  90% interval: [86.07639  93.75     75.97222  63.57639  66.041664 64.02778  42.95139
+ 42.430557]
+  95% interval: [89.44444  95.520836 80.72917  69.861115 71.84028  68.71528  48.993057
+ 46.458332]
+iGPK miscalibration area : TRAIN: 9.12e-02 || TEST: 8.69e-02
+SSID-GPK miscalibration area : TRAIN: 1.15e-01 || TEST: 1.09e-01
+Test  NLPD iGPK:     mean=545.1317, std=1793.6647
+Test  NLPD SSID-GPK: mean=262.4482, std=15.0663
+========================================================
+Train NRMSE Metrics for gaussian Noise with Intensity = 0.0%
+========================================================
+Train NRMSE iGPK      = 39.92 ± 25.60 %
+Train NRMSE Poly-eDMD = 40.91 ± 27.57 %
+Train NRMSE RBF-eDMD  = 73.47 ± 39.20 %
+Train NRMSE SSID-GPK  = 32.27 ± 22.49 %
+========================================================
+Test NRMSE Metrics for gaussian Noise with Intensity = 0.0%
+========================================================
+Test NRMSE iGPK      = 40.80 ± 17.49 %
+Test NRMSE Poly-eDMD = 40.27 ± 17.72 %
+Test NRMSE RBF-eDMD  = 80.65 ± 42.78 %
+Test NRMSE SSID-GPK  = 44.01 ± 22.75 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 1186.69 seconds
+Computation Time Poly-eDMD  = 1.03 seconds
+Computation Time RBF-eDMD   = 1.37 seconds
+Computation Time SSID-GPK   = 8.59 seconds
+========================================================
+========================================================
+All figures saved.

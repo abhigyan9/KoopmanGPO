@@ -1,0 +1,288 @@
+(gpk312) PS C:\Users\abhig\gpkoopman\KoopmanGPO> python .\sweep_noise_ipp.py --system "Unforced Duffing_right" --noise_types gaussian uniform --intensities 0.0 0.05 0.1 0.15 --lifted_order 10 --poly_deg 3 --max_iter 2000 --learn_rate 0.01
+
+=== gaussian | intensity=0.000 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [100.  99.]
+  95% interval: [100.  99.]
+
+Test coverage (per state):
+  90% interval: [100.  99.]
+  95% interval: [100.  99.]
+iGPK miscalibration area : TRAIN: 1.23e-01 || TEST: 1.23e-01
+SSID-GPK miscalibration area : TRAIN: 7.34e-02 || TEST: 8.30e-02
+Test  NLPD iGPK:     mean=3.8368, std=0.4734
+Test  NLPD SSID-GPK: mean=0.4579, std=1.6254
+========================================================
+Train NRMSE Metrics for gaussian Noise with Intensity = 0.0%
+========================================================
+Train NRMSE iGPK      = 5.17 ± 2.96 %
+Train NRMSE Poly-eDMD = 1.04 ± 0.73 %
+Train NRMSE RBF-eDMD  = 4.76 ± 3.23 %
+Train NRMSE SSID-GPK  = 9.26 ± 5.29 %
+========================================================
+Test NRMSE Metrics for gaussian Noise with Intensity = 0.0%
+========================================================
+Test NRMSE iGPK      = 5.16 ± 3.00 %
+Test NRMSE Poly-eDMD = 1.27 ± 1.18 %
+Test NRMSE RBF-eDMD  = 5.10 ± 4.40 %
+Test NRMSE SSID-GPK  = 11.28 ± 7.47 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 273.22 seconds
+Computation Time Poly-eDMD  = 1.39 seconds
+Computation Time RBF-eDMD   = 1.62 seconds
+Computation Time SSID-GPK   = 10.79 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== gaussian | intensity=0.050 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [88.362495 82.9     ]
+  95% interval: [88.362495 82.9     ]
+
+Test coverage (per state):
+  90% interval: [100.  99.]
+  95% interval: [100.  99.]
+iGPK miscalibration area : TRAIN: 7.20e-02 || TEST: 1.22e-01
+SSID-GPK miscalibration area : TRAIN: 2.29e-01 || TEST: 2.19e-01
+Test  NLPD iGPK:     mean=2.4601, std=0.4008
+Test  NLPD SSID-GPK: mean=74.7049, std=90.8850
+========================================================
+Train NRMSE Metrics for gaussian Noise with Intensity = 5.0%
+========================================================
+Train NRMSE iGPK      = 9.19 ± 3.26 %
+Train NRMSE Poly-eDMD = 8.89 ± 3.25 %
+Train NRMSE RBF-eDMD  = 24.27 ± 13.37 %
+Train NRMSE SSID-GPK  = 17.46 ± 13.40 %
+========================================================
+Test NRMSE Metrics for gaussian Noise with Intensity = 5.0%
+========================================================
+Test NRMSE iGPK      = 10.81 ± 4.51 %
+Test NRMSE Poly-eDMD = 10.29 ± 4.82 %
+Test NRMSE RBF-eDMD  = 25.76 ± 15.19 %
+Test NRMSE SSID-GPK  = 21.84 ± 19.51 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 269.07 seconds
+Computation Time Poly-eDMD  = 2.31 seconds
+Computation Time RBF-eDMD   = 0.45 seconds
+Computation Time SSID-GPK   = 18.42 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== gaussian | intensity=0.100 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [85.262505 63.862503]
+  95% interval: [88.362495 68.862495]
+
+Test coverage (per state):
+  90% interval: [88.84167 68.71667]
+  95% interval: [91.816666 74.566666]
+iGPK miscalibration area : TRAIN: 4.83e-02 || TEST: 2.97e-02
+SSID-GPK miscalibration area : TRAIN: 2.23e-01 || TEST: 2.15e-01
+Test  NLPD iGPK:     mean=10.1835, std=23.1931
+Test  NLPD SSID-GPK: mean=5.4659, std=5.3307
+========================================================
+Train NRMSE Metrics for gaussian Noise with Intensity = 10.0%
+========================================================
+Train NRMSE iGPK      = 18.34 ± 3.06 %
+Train NRMSE Poly-eDMD = 18.75 ± 3.16 %
+Train NRMSE RBF-eDMD  = 56.37 ± 21.88 %
+Train NRMSE SSID-GPK  = 14.73 ± 6.55 %
+========================================================
+Test NRMSE Metrics for gaussian Noise with Intensity = 10.0%
+========================================================
+Test NRMSE iGPK      = 18.90 ± 4.03 %
+Test NRMSE Poly-eDMD = 19.20 ± 4.09 %
+Test NRMSE RBF-eDMD  = 55.99 ± 26.38 %
+Test NRMSE SSID-GPK  = 16.78 ± 7.91 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 267.43 seconds
+Computation Time Poly-eDMD  = 1.38 seconds
+Computation Time RBF-eDMD   = 0.25 seconds
+Computation Time SSID-GPK   = 10.62 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== gaussian | intensity=0.150 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [61.062504 16.3875  ]
+  95% interval: [65.7125 18.65  ]
+
+Test coverage (per state):
+  90% interval: [65.825    16.883333]
+  95% interval: [70.058334 19.433332]
+iGPK miscalibration area : TRAIN: 2.05e-01 || TEST: 1.94e-01
+SSID-GPK miscalibration area : TRAIN: 9.74e-02 || TEST: 1.09e-01
+Test  NLPD iGPK:     mean=211.7587, std=331.7765
+Test  NLPD SSID-GPK: mean=1.6924, std=2.3400
+========================================================
+Train NRMSE Metrics for gaussian Noise with Intensity = 15.0%
+========================================================
+Train NRMSE iGPK      = 23.70 ± 2.53 %
+Train NRMSE Poly-eDMD = 23.69 ± 2.58 %
+Train NRMSE RBF-eDMD  = 76.35 ± 26.06 %
+Train NRMSE SSID-GPK  = 8.60 ± 4.10 %
+========================================================
+Test NRMSE Metrics for gaussian Noise with Intensity = 15.0%
+========================================================
+Test NRMSE iGPK      = 23.69 ± 3.20 %
+Test NRMSE Poly-eDMD = 23.66 ± 3.24 %
+Test NRMSE RBF-eDMD  = 74.76 ± 32.42 %
+Test NRMSE SSID-GPK  = 10.66 ± 6.99 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 263.47 seconds
+Computation Time Poly-eDMD  = 1.42 seconds
+Computation Time RBF-eDMD   = 0.25 seconds
+Computation Time SSID-GPK   = 10.53 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== uniform | intensity=0.050 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [99.9875 99.    ]
+  95% interval: [99.9875 99.    ]
+
+Test coverage (per state):
+  90% interval: [100.  99.]
+  95% interval: [100.  99.]
+iGPK miscalibration area : TRAIN: 1.22e-01 || TEST: 1.23e-01
+SSID-GPK miscalibration area : TRAIN: 2.25e-01 || TEST: 2.11e-01
+Test  NLPD iGPK:     mean=3.5121, std=0.3424
+Test  NLPD SSID-GPK: mean=10.9962, std=8.3317
+========================================================
+Train NRMSE Metrics for uniform Noise with Intensity = 5.0%
+========================================================
+Train NRMSE iGPK      = 5.45 ± 3.42 %
+Train NRMSE Poly-eDMD = 4.10 ± 1.98 %
+Train NRMSE RBF-eDMD  = 11.02 ± 8.06 %
+Train NRMSE SSID-GPK  = 23.17 ± 13.37 %
+========================================================
+Test NRMSE Metrics for uniform Noise with Intensity = 5.0%
+========================================================
+Test NRMSE iGPK      = 6.88 ± 4.48 %
+Test NRMSE Poly-eDMD = 4.87 ± 2.57 %
+Test NRMSE RBF-eDMD  = 11.91 ± 9.12 %
+Test NRMSE SSID-GPK  = 24.76 ± 14.72 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 268.57 seconds
+Computation Time Poly-eDMD  = 1.41 seconds
+Computation Time RBF-eDMD   = 0.26 seconds
+Computation Time SSID-GPK   = 10.97 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== uniform | intensity=0.100 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [98.       96.450005]
+  95% interval: [98.012505 96.450005]
+
+Test coverage (per state):
+  90% interval: [99.96667 98.96667]
+  95% interval: [99.975    98.975006]
+iGPK miscalibration area : TRAIN: 1.11e-01 || TEST: 1.22e-01
+SSID-GPK miscalibration area : TRAIN: 1.01e-01 || TEST: 1.17e-01
+Test  NLPD iGPK:     mean=4.1448, std=0.5504
+Test  NLPD SSID-GPK: mean=2.1695, std=2.7730
+========================================================
+Train NRMSE Metrics for uniform Noise with Intensity = 10.0%
+========================================================
+Train NRMSE iGPK      = 11.81 ± 3.58 %
+Train NRMSE Poly-eDMD = 10.47 ± 3.44 %
+Train NRMSE RBF-eDMD  = 29.09 ± 15.72 %
+Train NRMSE SSID-GPK  = 9.97 ± 8.39 %
+========================================================
+Test NRMSE Metrics for uniform Noise with Intensity = 10.0%
+========================================================
+Test NRMSE iGPK      = 12.36 ± 4.52 %
+Test NRMSE Poly-eDMD = 11.49 ± 4.61 %
+Test NRMSE RBF-eDMD  = 29.91 ± 17.55 %
+Test NRMSE SSID-GPK  = 12.78 ± 12.18 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 262.65 seconds
+Computation Time Poly-eDMD  = 1.44 seconds
+Computation Time RBF-eDMD   = 0.26 seconds
+Computation Time SSID-GPK   = 10.78 seconds
+========================================================
+========================================================
+All figures saved.
+
+=== uniform | intensity=0.150 | seed=100 ===
+========================================================
+========================================================
+Dataset: [40 Training + 60 Test Trajectories with 200 time-steps]
+========================================================
+Train coverage (per state):
+  90% interval: [97.275 91.275]
+  95% interval: [98.3625 93.8125]
+
+Test coverage (per state):
+  90% interval: [98.441666 93.916664]
+  95% interval: [99.01666  95.308334]
+iGPK miscalibration area : TRAIN: 6.34e-02 || TEST: 7.25e-02
+SSID-GPK miscalibration area : TRAIN: 2.47e-02 || TEST: 4.11e-02
+Test  NLPD iGPK:     mean=2.5833, std=1.6600
+Test  NLPD SSID-GPK: mean=-0.0588, std=1.1135
+========================================================
+Train NRMSE Metrics for uniform Noise with Intensity = 15.0%
+========================================================
+Train NRMSE iGPK      = 16.31 ± 3.57 %
+Train NRMSE Poly-eDMD = 16.55 ± 3.43 %
+Train NRMSE RBF-eDMD  = 48.13 ± 20.70 %
+Train NRMSE SSID-GPK  = 6.66 ± 3.80 %
+========================================================
+Test NRMSE Metrics for uniform Noise with Intensity = 15.0%
+========================================================
+Test NRMSE iGPK      = 16.86 ± 4.51 %
+Test NRMSE Poly-eDMD = 17.05 ± 4.55 %
+Test NRMSE RBF-eDMD  = 47.59 ± 24.07 %
+Test NRMSE SSID-GPK  = 8.54 ± 5.47 %
+========================================================
+========================================================
+========================================================
+Computation Time iGPK       = 280.64 seconds
+Computation Time Poly-eDMD  = 1.48 seconds
+Computation Time RBF-eDMD   = 0.25 seconds
+Computation Time SSID-GPK   = 11.14 seconds
+========================================================
+========================================================
+All figures saved.

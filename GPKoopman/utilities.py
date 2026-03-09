@@ -228,7 +228,7 @@ def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
         ax.set_ylabel("Mean NRMSE (averaged across states)")
         ax.grid(axis="y")
         ax.tick_params(axis="x", labelrotation=20)
-        ax.set_ylim(0, min(100, ax.get_ylim()[1]))
+        ax.set_ylim(0, min(2, ax.get_ylim()[1]))
         return bp
 
     _boxplot_with_mean(axes[0], train_data,

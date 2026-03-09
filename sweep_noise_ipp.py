@@ -79,19 +79,19 @@ parser.add_argument("--intensities", nargs="+", type=float,
                     default=[0.0],
                     help="Noise intensities (space separated)")
 
-parser.add_argument("--lifted_order", nargs="+", type=int,
+parser.add_argument("--lifted_order", type=int,
                     default=5,
                     help="Lifted System Order")
 
-parser.add_argument("--poly_deg", nargs="+", type=int,
+parser.add_argument("--poly_deg", type=int,
                     default=3,
                     help="Order of Polynomials for poly-eDMD")
 
-parser.add_argument("--max_iter", nargs="+", type=int,
+parser.add_argument("--max_iter", type=int,
                     default=2000,
                     help="Maximum Iterations for iGPK")
 
-parser.add_argument("--learn_rate", nargs="+", type=float,
+parser.add_argument("--learn_rate", type=float,
                     default=0.001,
                     help="")
 
@@ -103,10 +103,10 @@ args = parser.parse_args()
 SYSTEM_NAME = args.system
 NOISE_TYPES = args.noise_types
 INTENSITIES = args.intensities
-LIFTED_ORDER = args.lifted_order
-POLY_DEG = args.poly_deg
-MAX_ITER = args.max_iter
-LEARN_RATE = args.learn_rate
+LIFTED_ORDER = int(args.lifted_order)
+POLY_DEG = int(args.poly_deg)
+MAX_ITER = int(args.max_iter)
+LEARN_RATE = float(args.learn_rate)
 
 TRAIN_FRAC = 0.60
 TEST_FRAC = 1 - TRAIN_FRAC
@@ -115,7 +115,7 @@ NORMALIZE_DATA = True
 
 SEEDS = [100]
 
-OUTDIR = "Figures/Journal/" + SYSTEM_NAME
+OUTDIR = "Figures/Journal/" + SYSTEM_NAME + f'_{LIFTED_ORDER}D'
 
 # Find Scale of Hyperparameter Initialization
 SimData_raw, _, _, N, nTrain, _ = gpk.load_SimData(
