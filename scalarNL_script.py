@@ -392,7 +392,7 @@ def run_models_for_noise(
         lifting_order=lifted_order,
         max_iter=max_iter,
         learn_rate=learn_rate,
-        opt_weights=list(opt_weights),
+        opt_weights=opt_weights,
         routine=routine,
         train_method=train_method,
         hp_scale=kernel_hp_scale,

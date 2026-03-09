@@ -20,7 +20,7 @@ Notes:
     is applied to per-(noise,seed) tracking outputs and plots.
 """
 
-from get_iGPK_fcn import get_iGPK
+from get_iGPK_new import get_iGPK
 import matplotlib.pyplot as plt
 import os
 import csv
