@@ -67,7 +67,7 @@ def generate_initial_conditions(system, num_trajectories):
                           size=(1, num_trajectories)), dtype=torch.float64)
         return torch.vstack([x0, x1])
 
-    elif system == "Inhibited Predator-Prey":
+    elif system == "Inhibited Predator-Prey" or system == "IPP-Large":
         # Prey/predator strictly positive
         prey0 = torch.tensor(np.random.uniform(
             0.1, 4.0, size=(1, num_trajectories)), dtype=torch.float64)
@@ -100,7 +100,7 @@ def generate_and_save_data():
         # "van der Pol":          (gpk.f_VDP,            2, 0.01, None,                               1500, 60,  False),
         # "Reverse van der Pol":  (gpk.f_RVDP,           2, 0.10, None,                                400, 40,  False),
         # "Simple Pendulum":      (gpk.f_SDP,            2, 0.02, None,                                800, 50,  False),
-        "Chaotic-Lorenz":               (gpk.f_Lorenz,         3, 0.01, torch.tensor([10., 8./3., 28.], dtype=torch.float64), 200, 100, False),
+        # "Chaotic-Lorenz":               (gpk.f_Lorenz,         3, 0.01, torch.tensor([10., 8./3., 28.], dtype=torch.float64), 200, 100, False),
         # "Lotka Volterra":       (gpk.f_LotkaVolterra,  2, 0.20, torch.tensor([0.2, 0.8, 0.25, 0.4], dtype=torch.float64), 300, 60, False),
         # "Piecewise Linear":     (gpk.f_PWL1,           1, 2.00, None,                                120, 50,  False),
         # "PWL Discrete":         (gpk.df_PWL,           1, 1.00, None,                                120, 50,  True),
@@ -138,6 +138,15 @@ def generate_and_save_data():
         #     200,
         #     False
         # ),
+        "IPP-Large": (
+            gpk.f_IPP,
+            2,
+            0.2,
+            torch.tensor([1.0, 5.0, 1.0, 1.0, 2.0, 0.5, 0.3], dtype=torch.float64),
+            200,
+            1000,
+            False
+        )
     }
 
     os.makedirs("Data", exist_ok=True)
