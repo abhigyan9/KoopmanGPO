@@ -13,6 +13,7 @@ import time
 
 import torch
 import GPKoopman as gpk
+import numpy as np
 
 # HELPERS
 
@@ -121,9 +122,6 @@ def plot_gpo_noise_vs_injected_noise(rows: List[dict], outdir: str, system_name:
     """
     Plot gpo_noise_mean vs injected_noise for each training dataset size.
     """
-    if not rows:
-        print("No rows available for plotting.")
-        return
 
     train_sizes = sorted(set(r["train_size"] for r in rows))
 
@@ -133,13 +131,13 @@ def plot_gpo_noise_vs_injected_noise(rows: List[dict], outdir: str, system_name:
         subset = [r for r in rows if r["train_size"] == train_size]
         subset = sorted(subset, key=lambda r: r["noise_intensity"])
 
-        x = [100.0 * r["noise_intensity"] for r in subset]
-        y = [r["gpo_noise_mean"] for r in subset]
+        x = [r["noise_intensity"] for r in subset]
+        y = [r["gpo_noise_mean"]**2 for r in subset]
 
         ax.plot(x, y, marker='o', linewidth=1.8, label=f"{train_size} traj")
 
-    ax.set_xlabel("Injected noise intensity (%)")
-    ax.set_ylabel("Mean learned GP noise")
+    ax.set_xlabel("Injected Noise Variance")
+    ax.set_ylabel("Mean GP Noise variance")
     ax.set_title(f"{system_name}: learned GP noise vs injected noise")
     ax.grid(True, alpha=0.3)
     ax.legend(title="Training size")
@@ -229,9 +227,9 @@ def plot_mean_runtime_vs_train_size(rows: List[dict], outdir: str, system_name: 
 
 SYSTEM_NAME = "IPP-Large"
 
-TRAIN_FRAC_LIST = [0.025, 0.050, 0.100, 0.200, 0.400]
+TRAIN_FRAC_LIST = [0.050, 0.100, 0.200, 0.400]
 NOISE_TYPE = "gaussian"          # can also include "uniform"
-NOISE_INTENSITIES = [0.0, 0.025, 0.05, 0.075, 0.10, 0.15, 0.20]
+NOISE_INTENSITIES = [0.0, 0.05, 0.10, 0.15, 0.20]
 NORMALIZE_DATA = True
 CLIP = 100
 TEST_FRAC = 0.01
@@ -276,7 +274,7 @@ for train_frac, intensity in itertools.product(TRAIN_FRAC_LIST, NOISE_INTENSITIE
     t_iGPK = time.perf_counter() - t0
     # unpack iGPK
     TrainNRMSE = results["Train"]["NRMSE"]
-    _, gpo_noise_mean, gpo_noise_median, gpo_noise_std, gpo_noise_min, gpo_noise_max = _extract_gp_noise_stats(
+    _, gpo_noise_mean, gpo_noise_median, _, gpo_noise_min, gpo_noise_max = _extract_gp_noise_stats(
         results["ObsManager"])
     train_perf_mean = TrainNRMSE.mean()
 
@@ -288,7 +286,7 @@ for train_frac, intensity in itertools.product(TRAIN_FRAC_LIST, NOISE_INTENSITIE
         "n_test": int(nTest),
         "gpo_noise_mean": float(gpo_noise_mean),
         "gpo_noise_median": float(gpo_noise_median),
-        "gpo_noise_std": float(gpo_noise_std),
+        # "gpo_noise_std": float(gpo_noise_std),
         "gpo_noise_min": float(gpo_noise_min),
         "gpo_noise_max": float(gpo_noise_max),
         "train_nrmse_mean": float(train_perf_mean),
