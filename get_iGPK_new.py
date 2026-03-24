@@ -49,7 +49,7 @@ def get_cost_simple(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda
     # Compute the pseudo-inverse lifting operator and the corresponding matrices Cz and Az.
 
     try:
-        L = torch.linalg.cholesky(M @ M.mT)
+        L = torch.linalg.cholesky(M @ M.mT + (1e-10 *torch.eye(p, device=X.device)))
         M_pinv = torch.cholesky_solve(M.mT, L)
     except RuntimeError:
         M_pinv = torch.linalg.pinv(M)
@@ -58,6 +58,7 @@ def get_cost_simple(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda
 
     cost1 = torch.linalg.matrix_norm(Mplus - (Mplus @ M_pinvM))
     cost2 = torch.linalg.matrix_norm(X - (X @ M_pinvM))
+    # cost3 = torch.linalg.matrix_norm(Z)
 
     return (lambda1 * cost1) + (lambda2 * cost2)
 
@@ -68,7 +69,7 @@ def get_iGPK(
     lifting_order: int = 10,
     max_iter: int = 100,
     learn_rate: float = 0.01,
-    opt_weights: list[float] = [1., 1., 1.],
+    opt_weights: list[float] = [1., 1., 0.01],
     routine: str = "Z_only",        # "Z_only" or "SpacedOpt"
     train_method: str = "Horizon",  # "Horizon" or "K-Means"
     hp_scale: list = [None, 1.0, None],  # [hp1, hp2, mu]
@@ -142,10 +143,10 @@ def get_iGPK(
         raise ValueError(f"Unrecognized train_method: {train_method}")
 
     # === Optimization ===
-    lam1, lam2, _ = opt_weights
+    lam1, lam2, lam3 = opt_weights
     iter = 0
     cost_history = []
-    hp_opt_iter = int(0.02*max_iter)
+    hp_opt_iter = int(0.005*max_iter)
     num_hpopt = 0
 
     optimizer = torch.optim.SGD(
@@ -153,12 +154,12 @@ def get_iGPK(
     while iter < max_iter:
         optimizer.zero_grad()
         cost = get_cost_simple(Z, X, Xplus, ObsManager,
-                               nT=nTrain, lambda1=lam1, lambda2=lam2)
+                               nT=nTrain, lambda1=lam1, lambda2=lam2, lambda3=lam3)
         cost.backward()
         optimizer.step()
         cost_history.append(cost.item())
         iter += 1
-        if (routine == 'alternating') and (iter < max_iter) and ((iter % 25) == 0):
+        if (routine == 'alternating') and (iter < max_iter) and ((iter % 10) == 0):
             ObsManager.optimize_hyperparameters(
                 opt_mu=False, opt_sigma=True, max_iter=hp_opt_iter, lr=learn_rate)
             num_hpopt += 1
@@ -262,14 +263,14 @@ def find_hp_init(SimData: torch.tensor, nTrain: int) -> float:
 
 
 if __name__ == "__main__":
-    system_name = 'Lorenz'
+    system_name = 'OT_16steps'
     train_frac, test_frac = 0.4, 0.6
     clip = None
-    lifted_order = 40
+    lifted_order = 12
     noise_type = 'gaussian'
     # unused, samples, iterations, inner iterations
-    iters_list = [0, 8, 20, 500]
-    routine = "alternating"
+    MAX_ITER = 2000
+    routine = "Z-only"
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
@@ -287,12 +288,12 @@ if __name__ == "__main__":
     print(f'==== Starting iGPK Model Identification ====')
     t0 = time.perf_counter()
     results = get_iGPK(SimData, nTrain, nTest, lifted_order,
-                       iters_list, learn_rate=0.001,
-                       opt_weights=[1.0, 1.0, 1.0], routine=routine,
-                       train_method="Horizon", hp_scale=[None, HP_INIT, None])
+                       MAX_ITER, learn_rate=0.001,
+                       opt_weights=[1.0, 1.0, 0.0], routine=routine,
+                       train_method="Horizon", hp_scale=[4.0, HP_INIT, None])
     t_iGPK = time.perf_counter() - t0
     print(
-        f'{lifted_order}-D iGPK model identification with {iters_list[3]}-iterations, finished in {t_iGPK:.2f} seconds')
+        f'{lifted_order}-D iGPK model-ID with {MAX_ITER}-iterations, finished in {t_iGPK:.2f} seconds')
 
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
@@ -310,6 +311,8 @@ if __name__ == "__main__":
     idx_testMIN = torch.argmin(TestNRMSE.mean(dim=1))
     idx_testMAX = torch.argmax(TestNRMSE.mean(dim=1))
     time_arr = torch.arange(0., ts * (SimData.shape[2] - 1), ts)
+    print(f'Median Test NMRSE: {100*TestNRMSE.median():.2f}%')
+    print(f'Mean Test NMRSE: {100*TestNRMSE.mean():.2f}%')
 
     # 7) pack models for overlay plot
     models = [
@@ -338,7 +341,7 @@ if __name__ == "__main__":
     color = 'tab:blue'
     ax1.set_xlabel('Iteration')
     ax1.set_ylabel('log(Cost)', color=color)
-    ax1.plot(torch.log10(torch.abs(torch.tensor(cost_history))), color=color)
+    ax1.plot(torch.log10(torch.abs(cost_history)), color=color)
     ax1.tick_params(axis='y', labelcolor=color)
     ax1.grid(True, which='both', linestyle='--', alpha=0.7)
     ax2 = ax1.twinx()
@@ -347,4 +350,4 @@ if __name__ == "__main__":
     ax2.plot(cost_history, color=color)
     ax2.tick_params(axis='y', labelcolor=color)
     fig.tight_layout()
-    plt.close(fig)
+    plt.show()

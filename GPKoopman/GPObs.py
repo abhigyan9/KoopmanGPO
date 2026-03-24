@@ -19,9 +19,9 @@ def ThinSplineKernel(X1, X2, hp1, hp2, mu):
     return hp1 * ((dists/hp2)**2) * torch.log((dists / hp2) + epsilon)
 
 
-def InverseQuadraticKernel(X1, X2, hp1, hp2, mu):
+def RationalQuadraticKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)**2
-    return hp1 * (1 / (1 + (dists / (hp2**2))))
+    return (1 / ((1 + (dists / (2 * hp1 * hp2**2))) ** hp1))
 
 
 def CosineKernel(X1, X2, hp1, hp2, mu):
@@ -108,7 +108,7 @@ def ExplicitAttractorKernel(X1, X2, hp1, hp2, mu):
 KERNEL_FUNCTIONS = {
     'Gaussian': GaussianKernel,
     'ThinSpline': ThinSplineKernel,
-    'InverseQuadratic': InverseQuadraticKernel,
+    'RationalQuadratic': RationalQuadraticKernel,
     'ExpSineSqr': ExpSineSqrKernel,
     'Cosine': CosineKernel,
     'GibbsExpAttractor': GibbsExpAttractorKernel,

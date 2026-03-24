@@ -1,0 +1,17 @@
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|c|c|}
+\hline
+\textbf{Model} & \textbf{Min (\%)} & \textbf{Median (\%)} & \textbf{Max (\%)} & \textbf{Mean (\%)} & \textbf{Std (\%)} \\
+\hline\hline
+Poly-eDMD & 4.12 & 8.80 & 48.94 & 16.87 & 15.00 \\
+\hline
+RBF-eDMD & 9.09 & 13.87 & 111.09 & 32.13 & 31.89 \\
+\hline
+SSID-GPK & 5.73 & 14.24 & 39.81 & 17.70 & 10.78 \\
+\hline
+iGPK & 3.81 & 5.87 & 41.92 & 10.80 & 10.48 \\
+\hline
+\end{tabular}
+\caption{NRMSE summary statistics (in percent).}
+\end{table}

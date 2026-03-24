@@ -108,7 +108,7 @@ POLY_DEG = int(args.poly_deg)
 MAX_ITER = int(args.max_iter)
 LEARN_RATE = float(args.learn_rate)
 
-TRAIN_FRAC = 0.60
+TRAIN_FRAC = 0.80
 TEST_FRAC = 1 - TRAIN_FRAC
 CLIP = None
 NORMALIZE_DATA = True

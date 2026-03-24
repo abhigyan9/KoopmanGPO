@@ -460,13 +460,17 @@ def run_models_for_noise(
     # 7) pack models for overlay plot (not used here but kept for completeness)
     models = [
         {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
-            "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}},
+            "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest},
+            "ErrTrain": TrainNRMSE, "ErrTest": TestNRMSE},
         {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
-            "test": {"Xhat": XhatTest_poly}},
+            "test": {"Xhat": XhatTest_poly},
+            "ErrTrain": TrainNRMSE_poly, "ErrTest": TestNRMSE_poly},
         {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
-            "test": {"Xhat": XhatTest_rbf}},
+            "test": {"Xhat": XhatTest_rbf},
+            "ErrTrain": TrainNRMSE_rbf, "ErrTest": TestNRMSE_rbf},
         {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid, "Xcvhat": XcvhatTrain_ssid},
-            "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid}},
+            "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid},
+            "ErrTrain": TrainNRMSE_ssid, "ErrTest": TestNRMSE_ssid},
         # {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
         #     "test": {"Xhat": XhatTest_r3k}}
     ]
@@ -474,6 +478,7 @@ def run_models_for_noise(
     # 8) produce Scalar NL phase-portrait instead of time-series overlays
     stamp = datetime.now().strftime("%Y%m%d")
     tag = f"{system_name.replace(' ', '_')}_noise-{noise_type}_int-{intensity:.3f}_seed-{seed}_{stamp}"
+    torch.save(models, f'{outdir}/AllData_{tag}.pt')
 
     if system_name.lower().startswith("scalar"):
         # Generate 20 evenly spaced initial conditions in [-8, 8]
