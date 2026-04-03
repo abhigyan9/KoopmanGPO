@@ -459,9 +459,6 @@ def run_models_for_noise(
 
     # 7) pack models for overlay plot (not used here but kept for completeness)
     models = [
-        {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
-            "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest},
-            "ErrTrain": TrainNRMSE, "ErrTest": TestNRMSE},
         {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
             "test": {"Xhat": XhatTest_poly},
             "ErrTrain": TrainNRMSE_poly, "ErrTest": TestNRMSE_poly},
@@ -471,6 +468,9 @@ def run_models_for_noise(
         {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid, "Xcvhat": XcvhatTrain_ssid},
             "test": {"Xhat": XhatTest_ssid, "Xcvhat": XcvhatTest_ssid},
             "ErrTrain": TrainNRMSE_ssid, "ErrTest": TestNRMSE_ssid},
+        {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
+            "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest},
+            "ErrTrain": TrainNRMSE, "ErrTest": TestNRMSE},
         # {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
         #     "test": {"Xhat": XhatTest_r3k}}
     ]
@@ -482,7 +482,7 @@ def run_models_for_noise(
 
     if system_name.lower().startswith("scalar"):
         # Generate 20 evenly spaced initial conditions in [-8, 8]
-        x0_vals = torch.linspace(-6.0, 6.0, 25, dtype=C_igpk.dtype)
+        x0_vals = torch.linspace(-8.0, 8.0, 25, dtype=C_igpk.dtype)
         # Compute true one-step evolution using the provided discrete-time simulator.
         # The sim_discrete function returns a tensor of shape (n, num_steps).  We
         # request two steps (initial and next) to extract the one-step map.
@@ -507,8 +507,8 @@ def run_models_for_noise(
             for i in range(C_igpk.shape[1]):
                 Zmean[j, i, 0] = ObsManager_iGPK.predict_mean(
                     i, x0_vals[j].view(1, 1))
-                Zcv[j, i, i, 0] = ObsManager_iGPK.predict_covariance(
-                    i, x0_vals[j].view(1, 1))
+                Zcv[j, i, i, 0] = torch.abs(ObsManager_iGPK.predict_covariance(
+                    i, x0_vals[j].view(1, 1)))
 
             _, _, preds[j, :, :], preds_cv[j, :, :, :] = gpk.sim_LTI(
                 Zmean[j, :, 0].view(C_igpk.shape[1], 1).cpu(), A_igpk.cpu(), C_igpk.cpu(), num_steps=3, ts=None, x0cv=Zcv[j, :, :, 0].cpu())
@@ -583,6 +583,25 @@ def run_models_for_noise(
         ax3.legend()
         _save(fig3, outdir, f"{tag}_NRMSE_vs_time_test")
         plt.close(fig3)
+        GT_test = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
+
+        # Per-trajectory NLPD statistics (mean ± std across trajectories)
+        # nlpd_traj_train_igpk = _nlpd_per_traj(XhatTrain[:,:,:N-1],      XcvhatTrain[:,:,:,:N-1],      GT_train).detach().cpu()
+        nlpd_traj_test_igpk = _nlpd_per_traj(
+            XhatTest[:, :, :N-1],       XcvhatTest[:, :, :, :N-1],       GT_test).detach().cpu()
+        # nlpd_traj_train_ssid = _nlpd_per_traj(XhatTrain_ssid[:,:,:N-1], XcvhatTrain_ssid[:,:,:,:N-1], GT_train).detach().cpu()
+        nlpd_traj_test_ssid = _nlpd_per_traj(
+            XhatTest_ssid[:, :, :N-1],  XcvhatTest_ssid[:, :, :, :N-1],  GT_test).detach().cpu()
+
+        # Print summary
+        def _ms(x):
+            return float(x.mean()), float(x.std(unbiased=False))
+        # m, s = _ms(nlpd_traj_train_igpk);  print(f"Train NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
+        # m, s = _ms(nlpd_traj_train_ssid);  print(f"Train NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_igpk)
+        print(f"Test  NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
+        m, s = _ms(nlpd_traj_test_ssid)
+        print(f"Test  NLPD SSID-GPK: mean={m:.4f}, std={s:.4f}")
 
     else:
         # For all other systems we defer to the time-series visualisations in

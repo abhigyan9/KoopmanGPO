@@ -31,10 +31,10 @@ def CosineKernel(X1, X2, hp1, hp2, mu):
 
 def ExpSineSqrKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)
-    hp2 = torch.clamp(hp2, min=1e-2)
-    epsilon = 1e-4
-    return hp1 * torch.exp(epsilon - 0.5 * ((torch.sin(math.pi * dists / hp1)) ** 2) / hp2)
-    # return torch.exp((-2 * (torch.sin(math.pi * dists / hp1))**2) / hp2**2)
+    # hp2 = torch.clamp(hp2, min=1e-2)
+    # epsilon = 1e-4
+    # return hp1 * torch.exp(epsilon - 0.5 * ((torch.sin(math.pi * dists / hp1)) ** 2) / hp2)
+    return torch.exp((-2/hp2**2) * (torch.sin(math.pi * dists / hp1))**2)
 
 
 def GibbsExpAttractorKernel(X1, X2, hp1, hp2, mu):
@@ -673,7 +673,7 @@ class GPObservablesManager:
             if scale_hp2 is not None:
                 obs.hp2_list = nn.ParameterList([
                     nn.Parameter(2. * scale_hp2 * torch.rand(1,
-                                                               device=obs.device, requires_grad=True))
+                                                             device=obs.device, requires_grad=True))
                     for _ in range(num_kernels)
                 ])
 

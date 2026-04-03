@@ -1,0 +1,23 @@
+% Requires \usepackage{booktabs}
+% Requires \usepackage{siunitx}
+% If you want auto-wrapping: \usepackage{tabularx}
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{ll|ccccc|ccccc|c}
+\toprule
+\textbf{Noise} & \textbf{Int. (\%)} & \multicolumn{5}{c|}{\textbf{Train NRMSE (\%)}} & \multicolumn{5}{c|}{\textbf{Test NRMSE (\%)}} & \textbf{Time (s)} \\
+ & & \textbf{Min} & \textbf{Med} & \textbf{Max} & \textbf{Mean} & \textbf{Std} & \textbf{Min} & \textbf{Med} & \textbf{Max} & \textbf{Mean} & \textbf{Std} & \\
+\midrule
+uniform & \num{5.00} & \num{2.28} & \num{8.70} & \num{104.82} & \num{12.46} & \num{12.60} & \num{2.63} & \num{10.02} & \num{115.03} & \num{11.89} & \num{10.90} & \num{5.468e+01} \\
+uniform & \num{10.00} & \num{6.08} & \num{23.69} & \num{196.04} & \num{33.62} & \num{31.89} & \num{5.23} & \num{23.24} & \num{274.49} & \num{33.24} & \num{36.85} & \num{5.313e+01} \\
+uniform & \num{15.00} & \num{9.16} & \num{37.58} & \num{216.04} & \num{49.71} & \num{38.66} & \num{7.66} & \num{39.21} & \num{389.99} & \num{55.14} & \num{59.66} & \num{5.324e+01} \\
+uniform & \num{20.00} & \num{12.05} & \num{52.81} & \num{436.55} & \num{71.16} & \num{62.73} & \num{10.40} & \num{50.82} & \num{475.06} & \num{67.94} & \num{66.43} & \num{5.271e+01} \\
+\midrule
+\multicolumn{2}{l|}{\textbf{SID Time Summary}} & \num{5.271e+01} & \num{5.313e+01} & \num{5.468e+01} & \num{5.344e+01} & \num{7.412e-01} & \multicolumn{5}{c|}{} & \\
+\bottomrule
+\end{tabular}
+\caption{NRMSE summary (in \%) for Train/Test across noise settings. All values wrapped with \texttt{\textbackslash num\{\}} for \texttt{siunitx}.}
+\label{tab:nrmse_noise_sweep}
+\end{table}

@@ -52,7 +52,7 @@ def generate_initial_conditions(system, num_trajectories):
         return torch.tensor(np.random.uniform(0., 1., size=(1, num_trajectories)), dtype=torch.float64)
 
     elif system == "Scalar NL":
-        return torch.tensor(np.random.uniform(-5., 5., size=(1, num_trajectories)), dtype=torch.float64)
+        return torch.tensor(np.random.uniform(-6., 6., size=(1, num_trajectories)), dtype=torch.float64)
 
     # --- New systems below ---
     elif system == "Reciprocal Relaxer":
@@ -106,7 +106,7 @@ def generate_and_save_data():
         # "PWL Discrete":         (gpk.df_PWL,           1, 1.00, None,                                120, 50,  True),
 
         # --- Your existing discrete scalar NL example ---
-        # "Scalar NL": (gpk.df_scalarNL, 1, 1.00, None, 200, 50, True),
+        "Scalar NL": (gpk.df_scalarNL, 1, 1.00, None, 50, 100, True),
 
         # --- New systems ---
         # "Reciprocal Relaxer": (
@@ -138,15 +138,16 @@ def generate_and_save_data():
         #     200,
         #     False
         # ),
-        "IPP-Large": (
-            gpk.f_IPP,
-            2,
-            0.2,
-            torch.tensor([1.0, 5.0, 1.0, 1.0, 2.0, 0.5, 0.3], dtype=torch.float64),
-            200,
-            1000,
-            False
-        )
+        # "IPP-Large": (
+        #     gpk.f_IPP,
+        #     2,
+        #     0.2,
+        #     torch.tensor([1.0, 5.0, 1.0, 1.0, 2.0, 0.5, 0.3],
+        #                  dtype=torch.float64),
+        #     200,
+        #     1000,
+        #     False
+        # )
     }
 
     os.makedirs("Data", exist_ok=True)

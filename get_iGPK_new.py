@@ -49,7 +49,8 @@ def get_cost_simple(Z, X, Xplus, manager, nT=1, lambda1=1.0, lambda2=1.0, lambda
     # Compute the pseudo-inverse lifting operator and the corresponding matrices Cz and Az.
 
     try:
-        L = torch.linalg.cholesky(M @ M.mT + (1e-10 *torch.eye(p, device=X.device)))
+        L = torch.linalg.cholesky(
+            M @ M.mT + (1e-10 * torch.eye(p, device=X.device)))
         M_pinv = torch.cholesky_solve(M.mT, L)
     except RuntimeError:
         M_pinv = torch.linalg.pinv(M)
@@ -110,11 +111,18 @@ def get_iGPK(
         Z = torch.nn.Parameter(torch.rand(
             Xtrain.shape[1], p, device=device))   # Virtual Targets
         ObsManager = gpk.GPObservablesManager()
-        for i in range(p):
+        for i in range(int(p)):
             ObsManager.add_observable(
-                index=i, d=n, ns=nTrain, kernel_types=['Gaussian'],
+                index=i, d=n, ns=nTrain, kernel_types=[
+                    'Gaussian'],
                 combination='sum', noise=1e-4, m=500, device=device
             )
+        # for i in range(int(p/2), p):
+        #     ObsManager.add_observable(
+        #         index=i, d=n, ns=nTrain, kernel_types=[
+        #             'Gaussian', 'ExpSineSqr'],
+        #         combination='product', noise=1e-4, m=500, device=device
+        #     )
         for i in range(p):
             ObsManager.train_observable(i, Xtrain, Z[:, i])
         torch.manual_seed(seed_hp)
