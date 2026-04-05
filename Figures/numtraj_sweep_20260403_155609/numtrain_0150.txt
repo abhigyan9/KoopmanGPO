@@ -1,0 +1,43 @@
+System: inhibited_predator_prey
+Total Generated Trajectories: 170
+Number of Training Trajectories: 150
+Number of Test Trajectories: 20
+Prediction Steps Used for NLPD: 96
+NLPD Time Slice: [2, 97]
+Computation Time [s]: 985.730110
+Final Train Cost: 2.4608860016e+01
+
+Training-set %-NRMSE (trajectory-wise mean across states):
+  Mean   : 25.62
+  Median : 23.35
+
+Test-set %-NRMSE (trajectory-wise mean across states):
+  Mean   : 25.61
+  Median : 23.01
+
+Training-set NLPD (trajectory-wise):
+  Mean   : 2.918
+  Median : 2.894
+
+Test-set NLPD (trajectory-wise):
+  Mean   : 2.907
+  Median : 2.886
+
+Configuration:
+{
+  "lifting_order": 10,
+  "max_iter": 2500,
+  "learn_rate": 0.001,
+  "device": "cuda:0",
+  "train_method": "Horizon",
+  "routine": "Z_only",
+  "hp1_scale": 1.0,
+  "hp2_init": 1.3719277988417184,
+  "opt_weights": [
+    1.0,
+    1.0,
+    0.0
+  ],
+  "seed_z": 1234,
+  "seed_hp": 1234
+}
