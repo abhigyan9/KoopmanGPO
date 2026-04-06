@@ -15,11 +15,11 @@ function Get-Setting {
 }
 
 $PYTHON_BIN = Get-Setting 'PYTHON_BIN' 'python'
-$SYSTEM = Get-Setting 'SYSTEM' 'inhibited_predator_prey'
+$SYSTEM = Get-Setting 'SYSTEM' 'chaotic_lorenz'
 $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $OUTDIR = Get-Setting 'OUTDIR' (Join-Path 'Figures' "numtraj_sweep_$timestamp")
-$NUM_TEST = Get-Setting 'NUM_TEST' '20'
-$LIFTING_ORDER = Get-Setting 'LIFTING_ORDER' '10'
+$NUM_TEST = Get-Setting 'NUM_TEST' '40'
+$LIFTING_ORDER = Get-Setting 'LIFTING_ORDER' '19'
 $MAX_ITER = Get-Setting 'MAX_ITER' '2500'
 $LEARN_RATE = Get-Setting 'LEARN_RATE' '0.001'
 $DEVICE = Get-Setting 'DEVICE' 'cuda:0'
@@ -32,7 +32,7 @@ $OPT_W3 = Get-Setting 'OPT_W3' '0.0'
 $SEED_Z = Get-Setting 'SEED_Z' '1234'
 $SEED_HP = Get-Setting 'SEED_HP' '1234'
 $SLEEP_BETWEEN_RUNS = Get-Setting 'SLEEP_BETWEEN_RUNS' '10'
-$TRAJ_LIST_RAW = Get-Setting 'TRAJ_LIST' '20 50 100 150 200 300'
+$TRAJ_LIST_RAW = Get-Setting 'TRAJ_LIST' '20 50 100 150 200 250'
 $FAIL_FAST = Get-Setting 'FAIL_FAST' '0'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

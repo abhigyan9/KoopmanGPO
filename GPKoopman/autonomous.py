@@ -106,6 +106,23 @@ def f_PWL1(x, params=None):
     return torch.tensor([dx0], dtype=torch.float64)
 
 
+# Inverted Pendulum on a cart with horizontal force on cart
+def f_uPoC(x, params=None):
+    if params is None:
+        params = torch.tensor([0.4, 1., 9.81, 0.5, 6., 0.1/12], dtype=torch.float64)
+
+    m, M, g, l, b, I = params
+    sigma = -(l * m * torch.cos(x[0])) ** 2 + \
+        (m * l) ** 2 + (m * M * l ** 2) + I * (m + M)
+    dx0 = x[1]
+    dx1 = m * l * ((-b * x[3]) * torch.cos(x[0]) + (m + M) * g * torch.sin(
+        x[0]) - 0.5 * m * l * (x[1] ** 2) * torch.sin(2 * x[0])) / sigma
+    dx2 = x[3]
+    dx3 = ( - I * b * x[3] - l * ((m * l) ** 2 + I * m) * torch.sin(
+        x[0]) * (x[1] ** 2) - b * m * x[3] * (l ** 2) + 0.5 * g * torch.sin(2 * x[0]) * ((m * l) ** 2)) / sigma
+    return torch.tensor([dx0, dx1, dx2, dx3], dtype=torch.float64, device=x.device)
+
+
 def df_PWL(x, params=None):
     if params is None:
         params = torch.tensor([0.31, 0.94, -3., 0.32], dtype=torch.float64)
