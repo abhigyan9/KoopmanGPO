@@ -1,0 +1,43 @@
+System: chaotic_lorenz
+Total Generated Trajectories: 90
+Number of Training Trajectories: 50
+Number of Test Trajectories: 40
+Prediction Steps Used for NLPD: 146
+NLPD Time Slice: [2, 147]
+Computation Time [s]: 614.769982
+Final Train Cost: 1.0658541870e+02
+
+Training-set %-NRMSE (trajectory-wise mean across states):
+  Mean   : 22.77
+  Median : 20.66
+
+Test-set %-NRMSE (trajectory-wise mean across states):
+  Mean   : 24.85
+  Median : 23.37
+
+Training-set NLPD (trajectory-wise):
+  Mean   : 52.691
+  Median : 23.091
+
+Test-set NLPD (trajectory-wise):
+  Mean   : 49.871
+  Median : 27.358
+
+Configuration:
+{
+  "lifting_order": 19,
+  "max_iter": 2500,
+  "learn_rate": 0.001,
+  "device": "cuda:0",
+  "train_method": "Horizon",
+  "routine": "Z_only",
+  "hp1_scale": 1.0,
+  "hp2_init": 1.9274494489867597,
+  "opt_weights": [
+    1.0,
+    1.0,
+    0.0
+  ],
+  "seed_z": 1234,
+  "seed_hp": 1234
+}

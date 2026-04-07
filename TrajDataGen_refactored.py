@@ -35,7 +35,7 @@ SYSTEM_SPECS: dict[str, SystemSpec] = {
         func_name="f_UDO",
         state_dim=2,
         sample_time=0.01,
-        num_steps=1500,
+        num_steps=150,
         num_trajectories=60,
         is_discrete=False,
         ic_low=(1.5, -1.5),
@@ -48,7 +48,7 @@ SYSTEM_SPECS: dict[str, SystemSpec] = {
         func_name="f_VDP",
         state_dim=2,
         sample_time=0.01,
-        num_steps=1500,
+        num_steps=150,
         num_trajectories=60,
         is_discrete=False,
         ic_low=(-4.0, -4.0),
@@ -87,7 +87,7 @@ SYSTEM_SPECS: dict[str, SystemSpec] = {
         func_name="f_Lorenz",
         state_dim=3,
         sample_time=0.01,
-        num_steps=200,
+        num_steps=150,
         num_trajectories=100,
         is_discrete=False,
         ic_low=(-20.0, -20.0, -20.0),
@@ -198,6 +198,19 @@ SYSTEM_SPECS: dict[str, SystemSpec] = {
         ic_high=(4.0, 3.0),
         params=(1.0, 5.0, 1.0, 1.0, 2.0, 0.5, 0.3),
     ),
+    "unforced_poc": SystemSpec(
+        cli_name="unforced_poc",
+        display_name="Unforced POC",
+        func_name="f_uPoC",
+        state_dim=4,
+        sample_time=0.02,
+        num_steps=100,
+        num_trajectories=100,
+        is_discrete=False,
+        ic_low=(2.0, -0.4, 0.0, -0.3),
+        ic_high=(4.0, 0.4, 1.0, 0.3),
+        params=(0.4, 1., 9.81, 0.5, 6., 0.1/12),
+    )
 }
 
 
@@ -215,6 +228,7 @@ ALIASES = {
     "Reciprocal-Biased Damped Pendulum": "reciprocal_biased_damped_pendulum",
     "Inhibited Predator-Prey": "inhibited_predator_prey",
     "IPP-Large": "ipp_large",
+    "Unforced POC": "unforced_poc",
 }
 
 
