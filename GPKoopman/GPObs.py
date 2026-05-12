@@ -4,13 +4,14 @@ import torch.nn as nn
 import math
 from matplotlib import pyplot as plt
 import numpy as np
+from .utilities import check_pd
 
 # Define individual kernel functions
 
 
 def GaussianKernel(X1, X2, hp1, hp2, mu):
     dists = torch.cdist(X1.T, X2.T, p=2)**2
-    return hp1 * torch.exp(-dists / (2 * hp2**2))
+    return (hp1**2) * torch.exp(-dists / (2 * hp2**2))
 
 
 def ThinSplineKernel(X1, X2, hp1, hp2, mu):
@@ -184,6 +185,7 @@ class GPObservable:
         self.device = torch.device(device)
         self.kernel_types = kernel_types  # List of kernel names
         self.combination = combination    # How kernels are combined
+        self.ns = ns
 
         # Create nn.ParameterLists for hyperparameters and mu
         if hp1_list is not None:
@@ -231,13 +233,12 @@ class GPObservable:
 
         self.noise = nn.Parameter(torch.tensor(noise, device=self.device))
 
-        self.m = min(m, ns)
-        self.idx_SOR = torch.linspace(0, ns-1, self.m).int()
-        self.Xm = torch.empty((self.m, self.m), device=self.device)
-        self.Knm = torch.empty((ns, self.m), device=self.device)
-        self.y = torch.empty((ns, 1), device=self.device)  # Target values
+        # self.m = min(m, ns)
+        # self.idx_SOR = torch.linspace(0, ns-1, self.m).int()
+        # self.Xm = torch.zeros((self.m, self.m), device=self.device)
+        self.y = torch.zeros((ns, 1), device=self.device)  # Target values
         # SOR trained coefficient
-        self.aSOR = torch.empty((ns, 1), device=self.device)
+        # self.aSOR = torch.zeros((ns, 1), device=self.device)
         GPObservable.count += 1
 
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
@@ -285,50 +286,71 @@ class GPObservable:
         self.Xtrain = Xtrain
         self.y = ytrain
 
-        self.Xm = Xtrain[:, self.idx_SOR]
+        # self.Xm = Xtrain[:, self.idx_SOR]
 
-        self.Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                                  hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                                  mu_list=self.mu_list, combination=self.combination)
-        self.Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        # self.Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+        #                           hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                           mu_list=self.mu_list, combination=self.combination)
+        # self.Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        #                           hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                           mu_list=self.mu_list, combination=self.combination)
+        self.Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
                                   hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                                   mu_list=self.mu_list, combination=self.combination)
 
         try:
-            L = torch.linalg.cholesky(
-                (self.Kmn @ self.Kmn.T) + (self.noise ** 2) * self.Kmm)
-            self.invKmm = torch.cholesky_inverse(L)
+            L = torch.linalg.cholesky(self.Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            self.invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            U, S, V = torch.linalg.svd(
-                (self.Kmn @ self.Kmn.T) + (self.noise ** 2) * self.Kmm)
-            S_inv = torch.diag(torch.where(
-                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            self.invKmm = V.T @ S_inv @ U.T
+            self.invKxx = torch.linalg.pinv((self.Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
+        # except RuntimeError:
+        #     U, S, V = torch.linalg.svd(
+        #         (self.Kmn @ self.Kmn.T) + (self.noise ** 2) * self.Kmm)
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     self.invKmm = V.T @ S_inv @ U.T
 
-        self.alpha = self.invKmm @ self.Kmn @ self.y
+        self.alpha = self.invKxx @ self.y
 
     def predictGP(self, Xq):
         Xq = Xq.to(self.device)
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
-        mean = Kqm @ self.alpha
-        CovMat = (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
+        Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        mean = Kqx @ self.alpha
+        # CovMat = (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
+        CovMat = Kqq - (Kqx @ self.invKxx @ (Kqx.mT))
         return mean, CovMat
 
     def predictMean(self, Xq):
         Xq = Xq.to(self.device)
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
-        return Kqm @ self.alpha
+        return Kqx @ self.alpha
 
     def predictCov(self, Xq):
         Xq = Xq.to(self.device)
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
                              hp1_list=self.hp1_list, hp2_list=self.hp2_list,
                              mu_list=self.mu_list, combination=self.combination)
-        return (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
+        Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
+                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                             mu_list=self.mu_list, combination=self.combination)
+        # return (Kqm @ self.invKmm @ Kqm.T) * (self.noise ** 2)
+        return Kqq - (Kqx @ self.invKxx @ (Kqx.mT))
 
     def forward(self, Xq, ytrain):
         """
@@ -341,34 +363,47 @@ class GPObservable:
         #     r, beta=10.) for r in self.hp1_list]
         # hp2_list = [torch.nn.functional.softplus(
         #     r, beta=10.) for r in self.hp2_list]
-        hp1_list = self.hp1_list
-        hp2_list = self.hp2_list
+        # hp1_list = self.hp1_list
+        # hp2_list = self.hp2_list
 
-        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=hp1_list, hp2_list=hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=hp1_list, hp2_list=hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        # L = torch.linalg.cholesky(
-        #     (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-        # invKmm = torch.cholesky_inverse(L)
+        # Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=hp1_list, hp2_list=hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        #                      hp1_list=hp1_list, hp2_list=hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqq = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
         try:
-            L = torch.linalg.cholesky(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            invKmm = torch.cholesky_inverse(L)
+            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            U, S, V = torch.linalg.svd(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            S_inv = torch.diag(torch.where(
-                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            invKmm = V.T @ S_inv @ U.T
-        alpha = invKmm @ Kmn @ ytrain
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=hp1_list, hp2_list=hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        mean = Kqm @ alpha
-        cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
+            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
+        # try:
+        #     L = torch.linalg.cholesky(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     invKmm = torch.cholesky_inverse(L)
+        # except RuntimeError:
+        #     U, S, V = torch.linalg.svd(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     invKmm = V.T @ S_inv @ U.T
+        alpha = invKxx @ ytrain
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=hp1_list, hp2_list=hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # mean = Kqm @ alpha
+        # cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
+        mean = Kqx @ alpha
+        cov = Kqq - (Kqx @ invKxx @ (Kqx.mT))
         return mean, cov
 
     def forward_mean(self, Xq, ytrain):
@@ -378,85 +413,122 @@ class GPObservable:
         Xq = Xq.to(self.device)
         ytrain = ytrain.to(self.device)
 
-        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        # L = torch.linalg.cholesky((Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-        # invKmm = torch.cholesky_inverse(L)
+        # Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
         try:
-            L = torch.linalg.cholesky(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            invKmm = torch.cholesky_inverse(L)
+            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            U, S, V = torch.linalg.svd(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            S_inv = torch.diag(torch.where(
-                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            invKmm = V.T @ S_inv @ U.T
-        alpha = invKmm @ Kmn @ ytrain
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        mean = Kqm @ alpha
-        return mean
+            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
+        # try:
+        #     L = torch.linalg.cholesky(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     invKmm = torch.cholesky_inverse(L)
+        # except RuntimeError:
+        #     U, S, V = torch.linalg.svd(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     invKmm = V.T @ S_inv @ U.T
+        alpha = invKxx @ ytrain
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # mean = Kqm @ alpha
+        return Kqx @ alpha
 
     def forward_cov(self, Xq):
         """
         Fully differentiable forward pass that computes predictive covariance using current hyperparameters
         """
         Xq = Xq.to(self.device)
-        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        # L = torch.linalg.cholesky((Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-        # invKmm = torch.cholesky_inverse(L)
+        # Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqq = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
         try:
-            L = torch.linalg.cholesky(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            invKmm = torch.cholesky_inverse(L)
+            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            U, S, V = torch.linalg.svd(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            S_inv = torch.diag(torch.where(
-                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            invKmm = V.T @ S_inv @ U.T
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
-        return cov
+            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
+        # try:
+        #     L = torch.linalg.cholesky(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     invKmm = torch.cholesky_inverse(L)
+        # except RuntimeError:
+        #     U, S, V = torch.linalg.svd(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     invKmm = V.T @ S_inv @ U.T
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # cov = (Kqm @ invKmm @ Kqm.T) * (self.noise ** 2)
+        return (Kqq - (Kqx @ invKxx @ (Kqx.mT)))
 
     def forward_G(self, Xq):
         """
         Fully differentiable forward pass that computes the kernel covariance matrix at given query point(s)
         """
         Xq = Xq.to(self.device)
-        Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
+        # Kmm = KernelFunction(self.Xm, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        # Kmn = KernelFunction(self.Xm, self.Xtrain, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
+                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+                            mu_list=self.mu_list, combination=self.combination)
+        # Kqq = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
+        #                     hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                     mu_list=self.mu_list, combination=self.combination)
         try:
-            L = torch.linalg.cholesky(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            invKmm = torch.cholesky_inverse(L)
+            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            U, S, V = torch.linalg.svd(
-                (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
-            S_inv = torch.diag(torch.where(
-                S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
-            invKmm = V.T @ S_inv @ U.T
-        Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        G = Kqm @ invKmm @ Kmn
+            # print(f'{check_pd(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))}')
+            # print(f'HP2 Value: {self.hp2_list[0]}')
+            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
+        # try:
+        #     L = torch.linalg.cholesky(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     invKmm = torch.cholesky_inverse(L)
+        # except RuntimeError:
+        #     U, S, V = torch.linalg.svd(
+        #         (Kmn @ Kmn.T) + (self.noise ** 2) * Kmm)
+        #     S_inv = torch.diag(torch.where(
+        #         S > 1e-6, 1.0 / S, torch.tensor(0.0, device=self.device)))
+        #     invKmm = V.T @ S_inv @ U.T
+        # Kqm = KernelFunction(Xq, self.Xm, kernel_types=self.kernel_types,
+        #                      hp1_list=self.hp1_list, hp2_list=self.hp2_list,
+        #                      mu_list=self.mu_list, combination=self.combination)
+        G = Kqx @ invKxx # Kqm @ invKmm @ Kmn
         return G
 
     def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
@@ -516,39 +588,46 @@ class GPObservable:
                 mu_opt = self.mu_list
 
             # Compute the kernel matrices using the optimized hyperparameters and mu values.
-            jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
-            try:
-                iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm,
-                                                       kernel_types=self.kernel_types,
-                                                       hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                       mu_list=mu_opt,
-                                                       combination=self.combination))
-            except RuntimeError:
-                try:
-                    iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
-                                                            kernel_types=self.kernel_types,
-                                                            hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                            mu_list=mu_opt,
-                                                            combination=self.combination) + jitter)
-                except RuntimeError:
-                    jitter = 1e-5 * \
-                        torch.eye(self.Xm.shape[1], device=self.device)
-                    iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
-                                                            kernel_types=self.kernel_types,
-                                                            hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                                            mu_list=mu_opt,
-                                                            combination=self.combination) + jitter)
+            # jitter = 1e-6 * torch.eye(self.Xm.shape[1], device=self.device)
+            # try:
+            #     iKmm = torch.linalg.inv(KernelFunction(self.Xm, self.Xm,
+            #                                            kernel_types=self.kernel_types,
+            #                                            hp1_list=hp1_opt, hp2_list=hp2_opt,
+            #                                            mu_list=mu_opt,
+            #                                            combination=self.combination))
+            # except RuntimeError:
+            #     try:
+            #         iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
+            #                                                 kernel_types=self.kernel_types,
+            #                                                 hp1_list=hp1_opt, hp2_list=hp2_opt,
+            #                                                 mu_list=mu_opt,
+            #                                                 combination=self.combination) + jitter)
+            #     except RuntimeError:
+            #         jitter = 1e-5 * \
+            #             torch.eye(self.Xm.shape[1], device=self.device)
+            #         iKmm = torch.linalg.pinv(KernelFunction(self.Xm, self.Xm,
+            #                                                 kernel_types=self.kernel_types,
+            #                                                 hp1_list=hp1_opt, hp2_list=hp2_opt,
+            #                                                 mu_list=mu_opt,
+            #                                                 combination=self.combination) + jitter)
 
-            Kmn = KernelFunction(self.Xm, self.Xtrain,
-                                 kernel_types=self.kernel_types,
+            # Kmn = KernelFunction(self.Xm, self.Xtrain,
+            #                      kernel_types=self.kernel_types,
+            #                      hp1_list=hp1_opt, hp2_list=hp2_opt,
+            #                      mu_list=mu_opt,
+            #                      combination=self.combination)
+
+            # K_til = Kmn.T @ iKmm @ Kmn
+            K_til = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
                                  hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                 mu_list=mu_opt,
-                                 combination=self.combination)
-
-            K_til = Kmn.T @ iKmm @ Kmn
-            K_til += (noise_opt**2) * \
-                torch.eye(K_til.shape[0], device=self.device)
-            invK_til = torch.linalg.inv(K_til)
+                                 mu_list=mu_opt, combination=self.combination)
+            K_til += (noise_opt**2) * torch.eye(K_til.shape[0], device=self.device)
+            # invK_til = torch.linalg.inv(K_til)
+            try:
+                L = torch.linalg.cholesky(K_til)
+                invK_til = torch.cholesky_inverse(L)
+            except RuntimeError:
+                invK_til = torch.linalg.pinv(K_til, hermitian=True)
 
             log_det = torch.logdet(K_til)
             ll = -0.5 * (self.y @ invK_til @ self.y + log_det +
@@ -857,8 +936,8 @@ def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor,
     Xplus = torch.cat([Xall[:, j*(N+1)+1:j*(N+1)+N+1]
                       for j in range(nT)], dim=1)  # Time-shifted data matrix
 
-    M = torch.empty((p, N*nT), device=Xall.device)
-    Mplus = torch.empty((p, N*nT), device=Xall.device)
+    M = torch.zeros((p, N*nT), device=Xall.device)
+    Mplus = torch.zeros((p, N*nT), device=Xall.device)
     for i in range(p):
         M[i, :] = torch.transpose(manager.predict_mean(i, X), dim0=0, dim1=-1)
         Mplus[i, :] = torch.transpose(
@@ -907,8 +986,8 @@ def getKoopman_control(manager, indices, X, Xplus, U, nT, stateAug=False):
     N = X.shape[1]//nT
     p = len(indices)        # number of observables
 
-    M = torch.empty((p, N*nT))
-    Mplus = torch.empty((p, N*nT))
+    M = torch.zeros((p, N*nT))
+    Mplus = torch.zeros((p, N*nT))
     for i in range(p):
         M[i, :] = torch.transpose(manager.predict_mean(i, X), dim0=0, dim1=-1)
         Mplus[i, :] = torch.transpose(

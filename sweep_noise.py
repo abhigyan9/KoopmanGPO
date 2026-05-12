@@ -119,7 +119,7 @@ TEST_FRAC = 1 - TRAIN_FRAC
 CLIP = None
 NORMALIZE_DATA = True
 
-SEEDS = [100]
+SEEDS = [1234]
 stamp = datetime.now().strftime("%Y%m%d")
 OUTDIR = "Figures/Journal/" + SYSTEM_NAME + f'_{LIFTED_ORDER}D-' + stamp
 os.makedirs(OUTDIR, exist_ok=True)
@@ -159,5 +159,5 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         poly_deg=POLY_DEG,
         max_iter=MAX_ITER,
         learn_rate=LEARN_RATE,
-        kernel_hp_scale=[1.0, hp_scale, None],
+        kernel_hp_scale=[None, hp_scale, None],
     )

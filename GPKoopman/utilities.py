@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import warnings
 from matplotlib.patches import Ellipse
 from sklearn.cluster import KMeans
 from .autonomous import sim_LTI
@@ -228,7 +229,7 @@ def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
         ax.set_ylabel("Mean NRMSE (averaged across states)")
         ax.grid(axis="y")
         ax.tick_params(axis="x", labelrotation=20)
-        ax.set_ylim(0, min(2, ax.get_ylim()[1]))
+        # ax.set_ylim(0, min(2, ax.get_ylim()[1]))
         return bp
 
     _boxplot_with_mean(axes[0], train_data,
@@ -494,7 +495,7 @@ def check_pd(matrix: torch.Tensor):
     except RuntimeError:
         # Compute eigenvalues for semi-definiteness check
         eigenvalues = torch.linalg.eigvals(matrix)
-        if torch.all(eigenvalues >= 0):
+        if torch.all(eigenvalues.real >= 0):
             return "Positive Semi-Definite"
         else:
             return "Neither"
@@ -690,24 +691,29 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
     N = SimData_ref.shape[2] - 1
     p = A.shape[0]
 
-    Zmean = torch.empty((nTraj, p, N), dtype=ICset.dtype, device=ICset.device)
-    Zcv = torch.empty((nTraj, p, p, N), dtype=ICset.dtype, device=ICset.device)
-    Xhat = torch.empty((nTraj, n, N), dtype=ICset.dtype, device=ICset.device)
-    Xcv = torch.empty((nTraj, n, n, N), dtype=ICset.dtype, device=ICset.device)
-    NRMSE = torch.empty((nTraj, n), dtype=ICset.dtype, device=ICset.device)
+    Zmean = torch.zeros((nTraj, p, N), dtype=ICset.dtype, device=ICset.device)
+    Zcv = torch.zeros((nTraj, p, p, N), dtype=ICset.dtype, device=ICset.device)
+    Xhat = torch.zeros((nTraj, n, N), dtype=ICset.dtype, device=ICset.device)
+    Xcv = torch.zeros((nTraj, n, n, N), dtype=ICset.dtype, device=ICset.device)
+    NRMSE = torch.zeros((nTraj, n), dtype=ICset.dtype, device=ICset.device)
 
     for j in range(nTraj):
         # 1) Predict initial lifted state distribution from IC
         for i in range(p):
             Zmean[j, i, 0] = ObsManager.predict_mean(i, ICset[:, j].view(n, 1))
             Zcv[j, i, i, 0] = ObsManager.predict_covariance(
-                i, ICset[:, j].view(n, 1))
+                i, ICset[:, j].view(n, 1)).clamp(min=1e-8, max=1e8)
+            if torch.isnan(Zcv[j, i, i, 0]).any():
+                warnings.warn(f"GPO-{i} produced NaN lifted cov for {j}-th trajectory", RuntimeWarning)
+            if Zcv[j, i, i, 0] > 1e20:
+                warnings.warn(f"GPO-{i} produced lifted cov > 1e20 for {j}-th trajectory")
 
         # 2) Propagate with linear model
         Zmean[j], Zcv[j], Xhat[j], Xcv[j] = sim_LTI(
             Zmean[j, :, 0].view(p, 1), A, C, num_steps=N, ts=None, x0cv=Zcv[j, :, :, 0]
         )
-
+        if torch.isnan(Zcv).any():
+            warnings.warn(f"sim_LTI produced NaN lifted covariance for {j}-trajectory", UserWarning)
         # 3) NRMSE against reference (per-trajectory range)
         y_true = SimData_ref[traj_offset + j, :, :N]  # (n, N)
         errors = Xhat[j] - y_true

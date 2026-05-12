@@ -56,7 +56,7 @@ def _nlpd_per_traj(Xhat, Xcv, GT):
     returns (nTraj,) tensor
     """
     nTraj, n, N = Xhat.shape
-    traj_vals = torch.empty(nTraj, dtype=Xhat.dtype)
+    traj_vals = torch.zeros(nTraj, dtype=Xhat.dtype)
     for j in range(nTraj):
         acc = 0.0
         for k in range(N):
@@ -140,7 +140,7 @@ def coverage_curve(Xhat, Xcvhat, SimData, sim_offset=0, alphas=None, reduce="mea
     # Shapes:
     #   mu, sigma, y_true : (T, n, N)
     #   z[:,None,None,None] → (A,1,1,1)
-    lower, upper = torch.empty((len(alphas), nT, n, N)), torch.empty(
+    lower, upper = torch.zeros((len(alphas), nT, n, N)), torch.zeros(
         (len(alphas), nT, n, N))
     for i in range(alphas.shape[0]):
         lower[i, :, :, :] = mu - z[i] * sigma
@@ -230,7 +230,7 @@ def compare_coverage_curves(
     ) if torch.is_tensor(emp_state2) else emp_state2
 
     # Plot
-    plt.figure(figsize=(5, 4.5))
+    plt.figure(figsize=(6, 3))
     plt.plot(alphas1 * 100, emp_state1
              * 100, 'o-', label="SSID-GPK", lw=2)
     plt.plot(alphas2 * 100, emp_state2
@@ -351,7 +351,7 @@ def run_models_for_noise(
     learn_rate: float = 0.01,
     kernel_hp_scale: list[float | None] = [None, 1.0, None],
     opt_weights: list[float] = [1.0, 1.0, 1.0],
-    routine: str = "Z_only",
+    routine: str = "Z-only",
     train_method: str = "Horizon",
     device: str = "cuda:0",
 ):

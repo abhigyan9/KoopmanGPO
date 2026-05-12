@@ -56,7 +56,7 @@ def generate_basis_batch(X, degree):
     basis_size = single_basis.numel()
 
     # Pre-allocate tensor for efficiency
-    basis_tensor = torch.empty(
+    basis_tensor = torch.zeros(
         basis_size, num_states, dtype=X.dtype, device=X.device)
 
     for i in range(num_states):
@@ -92,9 +92,9 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
     p = C_edmd.shape[1]
 
     # ---------- Training ----------
-    ZedTrain = torch.empty((nTrain, p, N))
-    XedTrain = torch.empty((nTrain, n, N))
-    TrainNRMSE_eDMD = torch.empty((nTrain, n))
+    ZedTrain = torch.zeros((nTrain, p, N))
+    XedTrain = torch.zeros((nTrain, n, N))
+    TrainNRMSE_eDMD = torch.zeros((nTrain, n))
 
     for j in range(nTrain):
         ZedTrain[j, :, 0] = phi_batch(ICsetTrain[:, j].view(n, 1)).view(p,)
@@ -113,9 +113,9 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
         TrainNRMSE_eDMD[j] = rmse / range_vals
 
     # ---------- Testing ----------
-    ZedTest = torch.empty((nTest, p, N))
-    XedTest = torch.empty((nTest, n, N))
-    TestNRMSE_eDMD = torch.empty((nTest, n))
+    ZedTest = torch.zeros((nTest, p, N))
+    XedTest = torch.zeros((nTest, n, N))
+    TestNRMSE_eDMD = torch.zeros((nTest, n))
 
     for j in range(nTest):
         ZedTest[j, :, 0] = phi_batch(ICsetTest[:, j].view(n, 1)).view(p,)
@@ -259,9 +259,9 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
         C_edmd = X @ torch.linalg.pinv(phi_x)
 
     # Evaluate on the training set.
-    ZedTrain = torch.empty((nTrain, p, N))
-    XedTrain = torch.empty((nTrain, n, N))
-    TrainRMSE_eDMD = torch.empty((nTrain, n))
+    ZedTrain = torch.zeros((nTrain, p, N))
+    XedTrain = torch.zeros((nTrain, n, N))
+    TrainRMSE_eDMD = torch.zeros((nTrain, n))
 
     for j in range(nTrain):
         # Lift the initial condition for the j-th training trajectory.
@@ -275,9 +275,9 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
             (XedTrain[j, :, :] - SimData[j, :, :N])**2, dim=1))
 
     # Evaluate on the test set.
-    ZedTest = torch.empty((nTest, p, N))
-    XedTest = torch.empty((nTest, n, N))
-    TestRMSE_eDMD = torch.empty((nTest, n))
+    ZedTest = torch.zeros((nTest, p, N))
+    XedTest = torch.zeros((nTest, n, N))
+    TestRMSE_eDMD = torch.zeros((nTest, n))
 
     for j in range(nTest):
         ZedTest[j, :, 0] = rbf_observable(ICsetTest[:, j].view(
@@ -370,8 +370,8 @@ def SSID(
     total_cols = nT * cols_per_traj
 
     # Preallocate Hankel matrices
-    Y_l = torch.empty((blk_rows_y, total_cols), dtype=dtype, device=device)
-    U_l = torch.empty((blk_rows_u, total_cols), dtype=dtype, device=device)
+    Y_l = torch.zeros((blk_rows_y, total_cols), dtype=dtype, device=device)
+    U_l = torch.zeros((blk_rows_u, total_cols), dtype=dtype, device=device)
 
     # Fill the Hankel matrices trajectory by trajectory
     for j in range(nT):
