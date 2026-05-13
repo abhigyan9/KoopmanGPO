@@ -148,19 +148,6 @@ def get_cost_simple_fast(
     # ------------------------------------------------------------
     M = torch.einsum("isr,ri->is", G_X, Z)
     Mplus = torch.einsum("isr,ri->is", G_Xplus, Z)
-    # M_rows = []
-    # Mplus_rows = []
-
-    # # for i, obs in enumerate(manager.observables[:p]):
-    # for i in range(p):
-    #     mean_i = manager.observables[i].forward_mean(X, Z[:, i])
-    #     mean_plus_i = manager.observables[i].forward_mean(Xplus, Z[:, i])
-
-    #     M_rows.append(mean_i.reshape(-1))
-    #     Mplus_rows.append(mean_plus_i.reshape(-1))
-
-    # M = torch.stack(M_rows, dim=0)          # (p, S), S = N*nT
-    # Mplus = torch.stack(Mplus_rows, dim=0)  # (p, S)
 
     # ------------------------------------------------------------
     # 2. Compute Gram matrix in lifted space
@@ -209,7 +196,7 @@ def get_cost_simple_fast(
     cost2 = torch.linalg.matrix_norm(R2, ord="fro")
     # cost3 = torch.
 
-    return lambda1 * cost1 + lambda2 * cost2
+    return (lambda1 * cost1) + (lambda2 * cost2)
 
 def get_iGPK(
     SimData: torch.tensor,          # (num_traj, n, N+1)
@@ -346,11 +333,6 @@ def get_iGPK(
     XhatTest,  XcvTest,  TestNRMSE = gpk.sim_and_eval(
         ObsManager, A, C, ICsetTest,  SimData, traj_offset=nTrain)
 
-    # with torch.no_grad():
-    #     G_X, G_Xplus = build_G_cache(ObsManager, X, Xplus)
-    #     final_train_cost = get_cost_simple_fast(
-    #         optimal_Z, X, Xplus, ObsManager, G_X, G_Xplus, nTrain)
-
     # === Package results ===
     return {
         "ObsManager": ObsManager,
@@ -371,7 +353,6 @@ def get_iGPK(
             "cost": torch.tensor(cost_history).detach().cpu(),
             "iters": iter
         },
-        # "final_train_cost": final_train_cost.detach().cpu()
     }
 
 
@@ -443,12 +424,12 @@ if __name__ == "__main__":
         SimData_raw, nTrain, N)
 
     # 2) Find Initial Hyperparameter
-    HP_INIT = 2.507 # find_hp_init(SimData_clean, nTrain)
+    HP_INIT = find_hp_init(SimData_clean, nTrain)
     print(f'Heuristic Kernel-lengthscale param found to be {HP_INIT:.3e}')
 
     # 2) Noise
     SimData = gpk.add_noise(SimData_clean, noise_type=noise_type,
-                            intensity=0.10, seed=1234)
+                            intensity=0.0, seed=1234)
 
     print(f'==== Starting iGPK Model Identification ====')
     t0 = time.perf_counter()
@@ -459,7 +440,6 @@ if __name__ == "__main__":
     t_iGPK = time.perf_counter() - t0
     print(
         f'{lifted_order}-D iGPK model-ID with {results["history"]["iters"]}-epochs, finished in {t_iGPK:.2f} seconds')
-    # print(f'Final Train Cost:           {results["final_train_cost"]:.3e}')
 
     # unpack iGPK
     ObsManager = results["ObsManager"]
@@ -572,8 +552,6 @@ if __name__ == "__main__":
         XhatTest[:, :, :N-1],       XcvhatTest[:, :, :, :N-1],       GT_test).detach().cpu()
 
     # Print summary
-    def _ms(x):
-        return float(x.mean()), float(x.std(unbiased=False))
     m, s = _ms(nlpd_traj_test_igpk)
     print(f"Test  NLPD iGPK:     mean={m:.4f}, std={s:.4f}")
 
