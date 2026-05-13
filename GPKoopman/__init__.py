@@ -11,6 +11,10 @@ from .autonomous import sim_RK4, sim_LTI, sim_discrete
 # import functions from non_autonomous.py
 from .non_autonomous import sim_LTI_nonautonomous, sim_RK4_nonautonomous, fc_DO, fc_PoC, fc_SDP
 
+# import kernels
+from .kernels import Kernel, TwoPositiveParameterKernel, SumKernel, ProductKernel, KERNEL_CLASSES, build_kernel
+from .kernels import GaussianKernel, ExpSineSqrKernel, RationalQuadraticKernel
+
 # import dictionary, functions and classes from GPObs.py
 from .GPObs import KERNEL_FUNCTIONS
 from .GPObs import GaussianKernel, ExpSineSqrKernel, ThinSplineKernel, RationalQuadraticKernel, CosineKernel
