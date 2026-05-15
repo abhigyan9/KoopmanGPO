@@ -196,6 +196,7 @@ def sim_LTI(x0, A, C, num_steps, ts=0.01, x0cv=None):
 
     x = torch.zeros((n, num_steps), dtype=x0.dtype, device=x0.device)
     y = torch.zeros((m, num_steps), dtype=x0.dtype, device=x0.device)
+    A, C = A.to(device=x0.device), C.to(device=x0.device)
 
     if x0.dim() == 1:
         x[:, 0] = x0

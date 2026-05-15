@@ -4,6 +4,7 @@ import torch
 from .autonomous import sim_LTI
 from .utilities import get_kmeans, sim_and_eval
 from .GPObs import GPObservablesManager
+from .kernels import GaussianKernel
 from typing import Tuple
 
 # Extended Dynamic Mode Decomposition
@@ -587,15 +588,14 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
     ObsManager = GPObservablesManager()
     for i in range(lifting_order):
         ObsManager.add_observable(
-            index=i, d=C.shape[0], ns=z0_lift.shape[1], kernel_types=[
-                'Gaussian'],
-            combination='sum', noise=1e-4, device='cpu'
+            index=i, d=C.shape[0], Ns=z0_lift.shape[1], 
+            kernel=GaussianKernel(), noise=1e-4, device='cpu'
         )
     ObsManager.set_random_hyperparameters(scale=[1., 1., None])
     for i in range(lifting_order):
-        ObsManager.train_observable(i, ssid_Y[:, :, 0].mT, z0_lift[i, :])
+        ObsManager.train_observable(i, ssid_Y[:, :, 0].mT, z0_lift[i, :].unsqueeze(dim=1))
 
-    ObsManager.optimize_hyperparameters(opt_sigma=True)
+    ObsManager.optimize_hyperparameters(opt_noise=True)
 
     # Trajectory Simulation and Model Evaluation
     XhatTrain, XcvTrain, TrainNRMSE = sim_and_eval(

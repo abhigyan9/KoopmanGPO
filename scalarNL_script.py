@@ -352,7 +352,7 @@ def run_models_for_noise(
     kernel_hp_scale: list[float | None] = [None, 1.0, None],
     opt_weights: list[float] = [1.0, 1.0, 1.0],
     routine: str = "Z-only",
-    train_method: str = "Horizon",
+    train_method: str = "Zero-Mean",
     device: str = "cuda:0",
 ):
     """
@@ -385,7 +385,7 @@ def run_models_for_noise(
     print(f'========================================================')
 
     # 3) iGPK
-    t0 = time.perf_counter()
+    
     results = get_iGPK(
         SimData=SimData,
         nTrain=nTrain, nTest=nTest,
@@ -398,7 +398,7 @@ def run_models_for_noise(
         hp_scale=kernel_hp_scale,
         device=device,
     )
-    t_iGPK = time.perf_counter() - t0
+    t_iGPK = results['history']['opt_time']
 
     # unpack iGPK
     A_igpk, C_igpk = results["A"], results["C"]
@@ -437,20 +437,6 @@ def run_models_for_noise(
     XhatTest_ssid,  XcvhatTest_ssid,  TestNRMSE_ssid = results_ssid["Test"][
         "Xhat"],  results_ssid["Test"]["Xcv"],  results_ssid["Test"]["NRMSE"]
 
-    # 6) Kernel eDMD
-    # t0 = time.perf_counter()
-    # results_r3k = get_R3Koopman(
-    #     SimData=SimData,
-    #     nTrain=nTrain, nTest=nTest,
-    #     lifting_order=lifted_order)
-    # t_r3k = time.perf_counter() - t0
-
-    # # unpack Kernel eDMD results
-    # XhatTrain_r3k, TrainNRMSE_r3k = results_r3k["Train"][
-    #     "Xhat"], results_r3k["Train"]["NRMSE"]
-    # XhatTest_r3k, TestNRMSE_r3k = results_r3k["Test"][
-    #     "Xhat"],  results_r3k["Test"]["NRMSE"]
-
     # 6) indices + timebase (not used directly for Scalar NL plotting)
     idx_trainMIN = torch.argmin(TrainNRMSE.mean(dim=1))
     idx_testMIN = torch.argmin(TestNRMSE.mean(dim=1))
@@ -471,8 +457,6 @@ def run_models_for_noise(
         {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
             "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest},
             "ErrTrain": TrainNRMSE, "ErrTest": TestNRMSE},
-        # {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
-        #     "test": {"Xhat": XhatTest_r3k}}
     ]
 
     # 8) produce Scalar NL phase-portrait instead of time-series overlays
@@ -622,47 +606,45 @@ def run_models_for_noise(
                 y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_{which}")
 
-            models_nocv = [
-                {"name": "iGPK", "train": {"Xhat": XhatTrain},
-                    "test": {"Xhat": XhatTest}},
-                {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
-                    "test": {"Xhat": XhatTest_poly}},
-                {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
-                    "test": {"Xhat": XhatTest_rbf}},
-                {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
-                    "test": {"Xhat": XhatTest_ssid}},
-                # {"name": "R3K", "train": {"Xhat": XhatTrain_r3k},
-                #     "test": {"Xhat": XhatTest_r3k}}
-            ]
-            fig, _ = gpk.compare_model_predictions(
-                time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
-                    SimData.shape[2]-1),
-                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-                y_labels=y_labels)
-            _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
+            # models_nocv = [
+            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
+            #         "test": {"Xhat": XhatTest}},
+            #     {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
+            #         "test": {"Xhat": XhatTest_poly}},
+            #     {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
+            #         "test": {"Xhat": XhatTest_rbf}},
+            #     {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
+            #         "test": {"Xhat": XhatTest_ssid}},
+            # ]
+            # fig, _ = gpk.compare_model_predictions(
+            #     time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
+            #         SimData.shape[2]-1),
+            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+            #     y_labels=y_labels)
+            # _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
-            models_iGPK = [
-                {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
-                    "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}}]
-            fig, _ = gpk.compare_model_predictions(
-                time=time_arr, models=models_iGPK, SimData=SimData, idx=idx, N=(
-                    SimData.shape[2]-1),
-                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-                y_labels=y_labels)
-            _save(fig, outdir, f"{tag}_timeseries_igpkONLY_{which}")
+            # models_iGPK = [
+            #     {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
+            #         "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}}]
+            # fig, _ = gpk.compare_model_predictions(
+            #     time=time_arr, models=models_iGPK, SimData=SimData, idx=idx, N=(
+            #         SimData.shape[2]-1),
+            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+            #     y_labels=y_labels)
+            # _save(fig, outdir, f"{tag}_timeseries_igpkONLY_{which}")
 
-            models_iGPK_noCV = [
-                {"name": "iGPK", "train": {"Xhat": XhatTrain},
-                    "test": {"Xhat": XhatTest}}]
-            fig, _ = gpk.compare_model_predictions(
-                time=time_arr, models=models_iGPK_noCV, SimData=SimData, idx=idx, N=(
-                    SimData.shape[2]-1),
-                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-                y_labels=y_labels)
-            _save(fig, outdir, f"{tag}_timeseries_igpk_noCV_{which}")
+            # models_iGPK_noCV = [
+            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
+            #         "test": {"Xhat": XhatTest}}]
+            # fig, _ = gpk.compare_model_predictions(
+            #     time=time_arr, models=models_iGPK_noCV, SimData=SimData, idx=idx, N=(
+            #         SimData.shape[2]-1),
+            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+            #     y_labels=y_labels)
+            # _save(fig, outdir, f"{tag}_timeseries_igpk_noCV_{which}")
 
         train_int_coverage = compute_interval_coverage(
             XhatTrain, XcvhatTrain, SimData, sim_offset=0)
@@ -741,14 +723,12 @@ def run_models_for_noise(
     train_nrmse = {
         "Poly-eDMD": TrainNRMSE_poly,
         "RBF-eDMD": TrainNRMSE_rbf,
-        # "R3-K": TrainNRMSE_r3k,
         "SSID-GPK": TrainNRMSE_ssid,
         "iGPK": TrainNRMSE,
     }
     test_nrmse = {
         "Poly-eDMD": TestNRMSE_poly,
         "RBF-eDMD": TestNRMSE_rbf,
-        # "R3-K": TestNRMSE_r3k,
         "SSID-GPK": TestNRMSE_ssid,
         "iGPK": TestNRMSE,
     }
@@ -768,8 +748,6 @@ def run_models_for_noise(
         f'Train NRMSE RBF-eDMD  = {TrainNRMSE_rbf.mean()*100:.2f} \u00B1 {(TrainNRMSE_rbf*100).std():.2f} %')
     print(
         f'Train NRMSE SSID-GPK  = {TrainNRMSE_ssid.mean()*100:.2f} \u00B1 {(TrainNRMSE_ssid*100).std():.2f} %')
-    # print(
-    #     f'Train NRMSE R3-K      = {TrainNRMSE_r3k.mean()*100:.2f} \u00B1 {(TrainNRMSE_r3k*100).std():.2f} %')
     print(f'========================================================')
     print(
         f'Test NRMSE Metrics for {noise_type} Noise with Intensity = {intensity*100}%')
@@ -782,12 +760,6 @@ def run_models_for_noise(
         f'Test NRMSE RBF-eDMD  = {TestNRMSE_rbf.mean()*100:.2f} \u00B1 {(TestNRMSE_rbf*100).std():.2f} %')
     print(
         f'Test NRMSE SSID-GPK  = {TestNRMSE_ssid.mean()*100:.2f} \u00B1 {(TestNRMSE_ssid*100).std():.2f} %')
-    # print(
-    #     f'Test NRMSE R3-K      = {TestNRMSE_r3k.mean()*100:.2f} \u00B1 {(TestNRMSE_r3k*100).std():.2f} %')
-    print(f'========================================================')
-    print(f'========================================================')
-    # print(
-    # f'Computation Times for {lifted_order}-D model with {iters_list[1]} BO-samples, {iters_list[2]} BO-iters and {iters_list[3]} GD-steps')
     print(f'========================================================')
     print(f'Computation Time iGPK       = {t_iGPK:.2f} seconds')
     print(f'Computation Time Poly-eDMD  = {t_poly:.2f} seconds')

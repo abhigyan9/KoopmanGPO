@@ -1,310 +1,194 @@
-
+from __future__ import annotations
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from matplotlib import pyplot as plt
 import numpy as np
 import warnings
-from .utilities import check_pd
 
-# Define individual kernel functions
+from .kernels import Kernel, TwoPositiveParameterKernel, TwoParameterKernel
+from .prior_means import MeanFunction, ZeroMean
 
+class GPObservable(nn.Module):
 
-def GaussianKernel(X1, X2, hp1, hp2, mu):
-    dists = torch.cdist(X1.T, X2.T, p=2)**2
-    return (hp1**2) * torch.exp(-dists / (2 * hp2**2))
-
-
-def ThinSplineKernel(X1, X2, hp1, hp2, mu):
-    dists = torch.cdist(X1.T, X2.T, p=2)
-    epsilon = 1e-8
-    return hp1 * ((dists/hp2)**2) * torch.log((dists / hp2) + epsilon)
-
-
-def RationalQuadraticKernel(X1, X2, hp1, hp2, mu):
-    dists = torch.cdist(X1.T, X2.T, p=2)**2
-    return (1 / ((1 + (dists / (2 * hp1 * hp2**2))) ** hp1))
-
-
-def CosineKernel(X1, X2, hp1, hp2, mu):
-    dists = torch.cdist(X1.T, X2.T, p=2)
-    return hp1 * torch.cos(math.pi * dists / hp2) ** 2
-
-
-def ExpSineSqrKernel(X1, X2, hp1, hp2, mu):
-    dists = torch.cdist(X1.T, X2.T, p=2)
-    # hp2 = torch.clamp(hp2, min=1e-2)
-    # epsilon = 1e-4
-    # return hp1 * torch.exp(epsilon - 0.5 * ((torch.sin(math.pi * dists / hp1)) ** 2) / hp2)
-    return torch.exp((-2/hp2**2) * (torch.sin(math.pi * dists / hp1))**2)
-
-
-def GibbsExpAttractorKernel(X1, X2, hp1, hp2, mu):
-    """
-    Gibbs kernel with an attractor-dependent exponential decay length scale.
-    The length scale decreases with distance from the attractor.
-
-    Args:
-        X1 (Tensor): First set of points (d, n1).
-        X2 (Tensor): Second set of points (d, n2).
-        hp1 (Tensor): Scaling factor for the length scale.
-        hp2 (Tensor): Baseline length scale.
-        mu (Tensor): Location of the attractor (d, 1).
-
-    Returns:
-        Tensor: Kernel matrix of shape (n1, n2).
-    """
-    # Shift inputs by the attractor location
-    # X1_shifted = X1 - mu.unsqueeze(1)  # (d, n1)
-    # X2_shifted = X2 - mu.unsqueeze(1)  # (d, n2)
-    X1_shifted = X1 - mu
-    X2_shifted = X2 - mu
-
-    # Compute squared norm relative to attractor
-    X1_norm2 = torch.sum(X1_shifted**2, dim=0)  # (n1,)
-    X2_norm2 = torch.sum(X2_shifted**2, dim=0)  # (n2,)
-
-    # Compute input-dependent length scales
-    l_X1 = hp1 + hp2 * torch.exp(-X1_norm2)  # (n1,)
-    l_X2 = hp1 + hp2 * torch.exp(-X2_norm2)  # (n2,)
-
-    # Compute Gibbs kernel denominator
-    L_sum = (l_X1**2).unsqueeze(1) + (l_X2**2).unsqueeze(0)  # (n1, n2)
-    outer_l = l_X1.unsqueeze(1) * l_X2.unsqueeze(0)  # (n1, n2)
-    factor = torch.sqrt(2.0 * outer_l / L_sum)
-
-    # Compute squared Euclidean distances
-    dists = torch.cdist(X1.T, X2.T, p=2)**2  # (n1, n2)
-
-    # Compute kernel matrix
-    return factor * torch.exp(-dists / L_sum)
-
-
-def ExplicitAttractorKernel(X1, X2, hp1, hp2, mu):
-    """
-    Computes the Explicit Kernel K_Explicit(x, x') for attractor-based covariance.
-
-    Args:
-        X1 (Tensor): First set of points (d, n1).
-        X2 (Tensor): Second set of points (d, n2).
-        hp1 (Tensor): Scaling factor (theta_1).
-        hp2 (Tensor): Length scale (theta_2).
-        mu (Tensor): Location of the attractor (d, 1).
-
-    Returns:
-        Tensor: Kernel matrix (n1, n2).
-    """
-    # Compute squared distances from the attractor for X1 and X2
-    X1_shifted_norm2 = torch.sum((X1 - mu) ** 2, dim=0)  # (n1,)
-    X2_shifted_norm2 = torch.sum((X2 - mu) ** 2, dim=0)  # (n2,)
-
-    # Compute the exponent term
-    exponent = -(X1_shifted_norm2.unsqueeze(1) +
-                 X2_shifted_norm2.unsqueeze(0)) / (2 * hp2**2)
-
-    # Compute the kernel matrix
-    return hp1 * torch.exp(exponent)
-
-
-# Dictionary mapping kernel names to functions
-KERNEL_FUNCTIONS = {
-    'Gaussian': GaussianKernel,
-    'ThinSpline': ThinSplineKernel,
-    'RationalQuadratic': RationalQuadraticKernel,
-    'ExpSineSqr': ExpSineSqrKernel,
-    'Cosine': CosineKernel,
-    'GibbsExpAttractor': GibbsExpAttractorKernel,
-    'ExplicitAttractor': ExplicitAttractorKernel
-}
-
-
-def KernelFunction(X1, X2=None, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, mu_list=None, combination='sum'):
-    """
-    Computes a kernel matrix using multiple kernels, supporting attractor-based kernels.
-
-    Args:
-        X1 (Tensor): First set of points.
-        X2 (Tensor, optional): Second set of points. Defaults to None.
-        kernel_types (list): List of kernel function names.
-        hp1_list (list, optional): List of first hyperparameters for each kernel.
-        hp2_list (list, optional): List of second hyperparameters for each kernel.
-        mu_list (list, optional): List of attractor locations for each kernel.
-        combination (str): How to combine kernels ('sum' or 'product').
-
-    Returns:
-        Tensor: Kernel matrix.
-    """
-    if X2 is None:
-        X2 = X1
-
-    if hp1_list is None:
-        hp1_list = [torch.tensor(1.0, device=X1.device)] * len(kernel_types)
-    if hp2_list is None:
-        hp2_list = [torch.tensor(1.0, device=X1.device)] * len(kernel_types)
-    if mu_list is None:
-        mu_list = [None] * len(kernel_types)
-
-    if len(hp1_list) != len(kernel_types) or len(hp2_list) != len(kernel_types) or len(mu_list) != len(kernel_types):
-        raise ValueError(
-            "Number of hyperparameters and attractor locations must match the number of kernel types.")
-
-    # Compute the kernel matrix
-    if combination == 'sum':
-        K = sum(KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2, mu)
-                for kernel, hp1, hp2, mu in zip(kernel_types, hp1_list, hp2_list, mu_list))
-    elif combination == 'product':
-        K = torch.ones((X1.shape[1], X2.shape[1]), device=X1.device)
-        for kernel, hp1, hp2, mu in zip(kernel_types, hp1_list, hp2_list, mu_list):
-            K *= KERNEL_FUNCTIONS[kernel](X1, X2, hp1, hp2, mu)
-    else:
-        raise ValueError(
-            "Invalid combination method. Choose 'sum' or 'product'.")
-
-    return K
-
-
-class GPObservable:
-    count = 0
-
-    def __init__(self, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None,
-                 mu_list=None, noise=2e-6, combination='sum', device='cuda:0'):
+    def __init__(self, d: int, Ns: int, 
+                 kernel: Kernel, 
+                 prior_mean: MeanFunction | None = None, 
+                 noise: float = 1e-4, 
+                 dtype : torch.dtype = torch.float32, 
+                 device: str | torch.device = "cuda:0",
+                 eps: float = 1e-8,
+                 beta : float = 50.,
+                 thresh : float = 1.0,):
         """
-        Gaussian Process Observable with customizable kernel functions.
+        Gaussian Process Observable with kernel and prior mean objects.
 
         Args:
             d (int): Dimensionality of the inputs.
-            ns (int): Number of training samples.
-            kernel_types (list): List of kernel names.
-            hp1_list (list): List of first hyperparameters for each kernel.
-            hp2_list (list): List of second hyperparameters for each kernel.
-            mu_list (list): List of attractor locations for each kernel.
-            noise (float): Observation noise.
-            combination (str): Kernel combination method ('sum' or 'product').
-            device (str): Compute device ('cuda:0' or 'cpu').
+            Ns (int): Number of training samples.
+            kernel (kernels.Kernel): Covariance Kernel for the GP.
+            prior_mean (prior_means.MeanFunction): 
+                Fixed prior mean/basis function.
+                If None is specified, ZeroMean is used
+            noise (float) : GP Noise assumption
+            dtype (torch.dtype) : 
+                FP datatype for trainable parameters.
+                Inputs and outputs are also in dtype.
+            device (str OR torch.device) : Device on which object lives.
+            eps (float) : Positive floor used for GP-Noise transform
+
         """
+        super().__init__()
+
+        # Core GP metadata ---------------------------------
+        # --------------------------------------------------
+        self.d = d
+        self.Ns = Ns
+        self.eps = eps
+        self.dtype = dtype
         self.device = torch.device(device)
-        self.kernel_types = kernel_types  # List of kernel names
-        self.combination = combination    # How kernels are combined
-        self.ns = ns
+        self.beta = beta
+        self.thresh = thresh
 
-        # Create nn.ParameterLists for hyperparameters and mu
-        if hp1_list is not None:
-            self.hp1_list = nn.ParameterList(
-                [param if isinstance(param, nn.Parameter)
-                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-                                   else torch.tensor(param, device=self.device))
-                 for param in hp1_list]
-            )
-        else:
-            self.hp1_list = nn.ParameterList([
-                nn.Parameter(torch.tensor(1.0, device=self.device))
-                for _ in kernel_types
-            ])
+        # Kernel Object ------------------------------------
+        if not isinstance(kernel, Kernel):
+            raise TypeError(
+                f"kernel must be an instance of Kernel. "
+                f"Received type: {type(kernel)}")
 
-        if hp2_list is not None:
-            self.hp2_list = nn.ParameterList(
-                [param if isinstance(param, nn.Parameter)
-                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-                                   else torch.tensor(param, device=self.device))
-                 for param in hp2_list]
-            )
-        else:
-            self.hp2_list = nn.ParameterList([
-                nn.Parameter(torch.tensor(1.0, device=self.device))
-                for _ in kernel_types
-            ])
+        self.kernel = kernel.to(device=self.device, dtype=self.dtype)
+        self.kernel.beta = self.beta
+        self.kernel.thresh = self.thresh
 
-        if mu_list is not None:
-            self.mu_list = nn.ParameterList(
-                [param if isinstance(param, nn.Parameter)
-                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-                                   else torch.tensor(param, device=self.device))
-                 for param in mu_list]
-            )
-        else:
-            self.mu_list = nn.ParameterList([
-                nn.Parameter(torch.zeros((d, 1), device=self.device))
-                for _ in kernel_types
-            ])
+        # Prior mean function ------------------------------
+        if prior_mean is None:
+            prior_mean = ZeroMean()
 
-        if len(self.hp1_list) != len(kernel_types) or len(self.hp2_list) != len(kernel_types):
-            raise ValueError(
-                "Number of hyperparameters must match the number of kernel types.")
+        if not isinstance(prior_mean, MeanFunction):
+            raise TypeError(
+                f"prior_mean must be None or an instance of MeanFunction. "
+                f"Received type: {type(prior_mean)}")
 
-        self.noise = nn.Parameter(torch.tensor(noise, device=self.device))
-        self.y = torch.zeros((ns, 1), device=self.device)  # Target values
+        self.prior_mean = prior_mean.to(device=self.device)
 
-        GPObservable.count += 1
+        # Observation Noise --------------------------------
+        #   - We store an unconstrained raw parameter and expose
+        #     positive noise via noise property:
+        #       noise = softplus(raw_noise) + eps
+        # --------------------------------------------------
+        noise_tensor = torch.as_tensor(
+            noise, device=self.device, dtype=self.dtype,)
+
+        if torch.any(noise_tensor <= 0):
+            raise ValueError(f"noise must be strictly positive. Received {noise}.")
+
+        self.raw_noise = nn.Parameter(
+            self._inverse_softplus(
+                torch.clamp(noise_tensor - self.eps, min=self.eps),
+                beta=self.beta, thresh=self.thresh))
+
+        # Training data placeholders -----------------------
+        self.Xtrain = None
+        self.ytrain = None
+
+        # Cached kernel / GP matrices ----------------------
+        self.invKxx = None
+        self.alpha = None
+
+    @staticmethod
+    def _inverse_softplus(x: torch.Tensor,
+                          beta : float = 10.0,
+                          thresh : float = 1.0) -> torch.Tensor:
+        """
+        Numerically stable inverse softplus for x > 0.
+        """
+        return torch.where(
+            beta * x > thresh,
+            x,
+            torch.log(torch.expm1(beta * x)) / beta
+        )
+
+    @property
+    def noise(self) -> torch.Tensor:
+        """
+        Positive observation-noise standard deviation.
+        """
+        return F.softplus(self.raw_noise, beta=self.beta, threshold=self.thresh) + self.eps
 
     def set_hyperparameters(self, hp1_list=None, hp2_list=None):
+        raise NotImplementedError
+        # if hp1_list is not None:
+        #     self.hp1_list = nn.ParameterList(
+        #         [param if isinstance(param, nn.Parameter)
+        #          else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
+        #                            else torch.tensor(param, device=self.device))
+        #          for param in hp1_list]
+        #     )
 
-        if hp1_list is not None:
-            self.hp1_list = nn.ParameterList(
-                [param if isinstance(param, nn.Parameter)
-                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-                                   else torch.tensor(param, device=self.device))
-                 for param in hp1_list]
-            )
+        # if hp2_list is not None:
+        #     self.hp2_list = nn.ParameterList(
+        #         [param if isinstance(param, nn.Parameter)
+        #          else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
+        #                            else torch.tensor(param, device=self.device))
+        #          for param in hp2_list]
+        #     )
 
-        if hp2_list is not None:
-            self.hp2_list = nn.ParameterList(
-                [param if isinstance(param, nn.Parameter)
-                 else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-                                   else torch.tensor(param, device=self.device))
-                 for param in hp2_list]
-            )
-
-    def get_parameters(self):
+    def get_parameters(self) -> dict:
         """
         Returns a dictionary containing the current hyperparameters (hp1_list, hp2_list), noise,
         and attractor locations (mu_list) for this GPObservable.
         """
-        params = {
-            "hp1_list": [hp.detach() for hp in self.hp1_list],
-            "hp2_list": [hp.detach() for hp in self.hp2_list],
-            "noise": self.noise.detach(),
-            "mu_list": [mu.detach() for mu in self.mu_list]
-        }
-        return params
+        raise NotImplementedError
+        # params = {
+        #     "hp1_list": [hp.detach() for hp in self.hp1_list],
+        #     "hp2_list": [hp.detach() for hp in self.hp2_list],
+        #     "noise": self.noise.detach(),
+        #     "mu_list": [mu.detach() for mu in self.mu_list]
+        # }
+        # return params
 
-    def trainGP(self, Xtrain, ytrain):
-        self.Xtrain = Xtrain.to(self.device)
-        self.y = ytrain.to(self.device)
+    def trainGP(self, Xtrain : torch.Tensor, ytrain : torch.Tensor):
+        if (Xtrain.shape[0] != self.d) or (Xtrain.shape[1] != self.Ns):
+            raise ValueError(f'Xtrain must be of shape {tuple(self.d, self.Ns)}. '
+                             f'Recieved Xtrain of shape {tuple(Xtrain.shape)}')
+        if (ytrain.shape[0] != self.Ns) or (ytrain.shape[1] != 1):
+            raise ValueError(f'ytrain must be of shape {tuple(self.Ns, 1)}. '
+                             f'Recieved ytrain of shape {tuple(ytrain.shape)}')
 
-        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                                  hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                                  mu_list=self.mu_list, combination=self.combination)
+        self.Xtrain = Xtrain.to(dtype=self.dtype, device=self.device)
+        self.ytrain = ytrain.to(dtype=self.dtype, device=self.device)
+
+        Kxx = self.kernel(self.Xtrain, self.Xtrain)
 
         try:
-            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
             self.invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            self.invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
-            warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+            self.invKxx = torch.linalg.pinv((Kxx + 
+                                (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device)), 
+                                hermitian=True)
+            warnings.warn(f"Cholesky failed in trainGP. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
-        self.alpha = self.invKxx @ self.y
+        self.alpha = self.invKxx @ (self.ytrain - self.prior_mean(self.Xtrain))
 
-    def predictMean(self, Xq):
-        Xq = Xq.to(self.device)
+    def predictMean(self, Xq : torch.Tensor) -> torch.Tensor:
+        Xq = Xq.to(dtype=self.dtype, device=self.device)
 
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        return Kqx @ self.alpha
+        Kqx = self.kernel(Xq, self.Xtrain)
+        return self.prior_mean(Xq) + Kqx @ self.alpha
 
-    def predictCov(self, Xq):
-        Xq = Xq.to(self.device)
+    def predictCov(self, Xq : torch.Tensor) -> torch.Tensor:
+        Xq = Xq.to(device=self.device, dtype=self.dtype)
 
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
-        Kqq = KernelFunction(Xq, Xq, kernel_types=self.kernel_types,
-                             hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                             mu_list=self.mu_list, combination=self.combination)
+        Kqx = self.kernel(Xq, self.Xtrain)
+        Kqq = self.kernel(Xq, Xq)
 
         return Kqq - (Kqx @ self.invKxx @ (Kqx.mT))
 
-    def predictGP(self, Xq):
+    def predictGP(self, Xq : torch.Tensor
+                  ) -> tuple[torch.Tensor, torch.Tensor]:
         Xq = Xq.to(self.device)
 
         mean = self.predictMean(Xq)
@@ -312,203 +196,257 @@ class GPObservable:
 
         return mean, cov
     
-    def forward(self, Xq, ytrain):
+    def forward(self, Xq : torch.Tensor, ytrain : torch.Tensor
+                ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Fully differentiable forward pass that computes predictions using the current hyperparameters.
         """
-        Xq = Xq.to(self.device)
-        ytrain = ytrain.to(self.device)
+        Xq = Xq.to(device=self.device, dtype=self.dtype)
+        ytrain = ytrain.to(device=self.device, dtype=self.dtype)
 
-        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqq = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
+        Kxx = self.kernel(self.Xtrain, self.Xtrain)
+        Kqx = self.kernel(Xq, self.Xq)
+        Kqq = self.kernel(Xq, Xq)
+
         try:
-            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
             invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
-            warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+            invKxx = torch.linalg.pinv((Kxx + 
+                        (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device)), 
+                        hermitian=True)
+            warnings.warn(f"Cholesky failed in forward. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
-        alpha = invKxx @ ytrain
-        mean = Kqx @ alpha
+        alpha = invKxx @ ( ytrain - self.prior_mean(self.Xtrain) )
+        mean = self.prior_mean(Xq) + Kqx @ alpha
         cov = Kqq - (Kqx @ invKxx @ (Kqx.mT))
 
         return mean, cov
 
-    def forward_mean(self, Xq, ytrain):
+    def forward_mean(self, Xq : torch.Tensor, ytrain : torch.Tensor) -> torch.Tensor:
         """
         Fully differentiable forward pass that computes predictive mean using current hyperparameters
         """
-        Xq = Xq.to(self.device)
-        ytrain = ytrain.to(self.device)
+        Xq = Xq.to(device=self.device, dtype=self.dtype)
+        ytrain = ytrain.to(device=self.device, dtype=self.dtype)
 
-        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
+        Kxx = self.kernel(self.Xtrain, self.Xtrain)
+        Kqx = self.kernel(Xq, self.Xtrain)
+
         try:
-            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
             invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
-            warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+            invKxx = torch.linalg.pinv((Kxx + 
+                        (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device)), 
+                        hermitian=True)
+            warnings.warn(f"Cholesky failed in forward_mean. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
-        alpha = invKxx @ ytrain
+        alpha = invKxx @ ( ytrain - self.prior_mean(self.Xtrain) )
 
-        return Kqx @ alpha
+        return self.prior_mean(Xq) + Kqx @ alpha
 
-    def forward_cov(self, Xq):
+    def forward_cov(self, Xq : torch.Tensor) -> torch.Tensor:
         """
         Fully differentiable forward pass that computes predictive covariance using current hyperparameters
         """
-        Xq = Xq.to(self.device)
+        Xq = Xq.to(device=self.device, dtype=self.dtype)
+        
+        Kxx = self.kernel(self.Xtrain, self.Xtrain)
+        Kqx = self.kernel(Xq, self.Xtrain)
+        Kqq = self.kernel(Xq, Xq)
 
-        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqq = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
         try:
-            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
             invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
-            warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+            invKxx = torch.linalg.pinv((Kxx + 
+                        (self.noise ** 2) * torch.eye(self.Ns, dtype=self.self.dtype, device=self.device)), 
+                        hermitian=True)
+            warnings.warn(f"Cholesky failed in forward_cov. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
         return (Kqq - (Kqx @ invKxx @ (Kqx.mT)))
 
-    def forward_G(self, Xq):
+    def forward_G(self, Xq: torch.Tensor) -> torch.Tensor:
         """
         Fully differentiable forward pass that computes the kernel covariance matrix at given query point(s)
         """
-        Xq = Xq.to(self.device)
+        Xq = Xq.to(device=self.device, dtype=self.dtype)    # (d, Nq)
 
-        Kxx = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
-        Kqx = KernelFunction(Xq, self.Xtrain, kernel_types=self.kernel_types,
-                            hp1_list=self.hp1_list, hp2_list=self.hp2_list,
-                            mu_list=self.mu_list, combination=self.combination)
+        Kxx = self.kernel(self.Xtrain, self.Xtrain) # (Ns, Ns)
+        Kqx = self.kernel(Xq, self.Xtrain)  # (Nq, Ns)
 
         try:
-            L = torch.linalg.cholesky(Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device))
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
             invKxx = torch.cholesky_inverse(L)
         except RuntimeError:
-            invKxx = torch.linalg.pinv((Kxx + (self.noise ** 2) * torch.eye(self.ns, device=self.device)), hermitian=True)
-            warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+            invKxx = torch.linalg.pinv((Kxx + 
+                        (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device)), 
+                        hermitian=True)
+            warnings.warn(f"Cholesky failed in forward_G. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
-        G = Kqx @ invKxx
+        G = Kqx @ invKxx    # (Nq, Ns)
         return G
 
-    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
-        if not hasattr(self, 'Xtrain') or not hasattr(self, 'y'):
+    def optimize_hyperparameters(
+            self, num_iter : int = 100, 
+            lr : float = 0.01, opt_noise : bool = False):
+        """
+        Optimize GPO kernel hyperparameters by maximizing log marginal likelihood
+
+        Args
+            num_iter
+            lr
+            opt_noise
+        
+        Notes
+        -----
+            - Kernel parameters are optimized through self.kernel.optimization_parameters().
+            - The prior mean function is incorporated through the residual:
+                y_centered = y - m(Xtrain)
+            - At the end, self.trainGP(self.Xtrain, self.y) is called to refresh
+            all cached kernel matrices and posterior quantities.
+        """
+
+        if self.Xtrain is None or self.ytrain is None:
             raise ValueError(
-                "Training data not found. Please call trainGP before optimizing hyperparameters.")
+                "Training data not found. Please call trainGP first."
+            )
 
-        # Store original references for hyperparameters and mu
-        orig_hp1_list = self.hp1_list
-        orig_hp2_list = self.hp2_list
-        if opt_sigma:
-            orig_noise = self.noise
-        if opt_mu:
-            orig_mu_list = self.mu_list
+        X = self.Xtrain # (d, Ns)
+        y = self.ytrain # (Ns, 1)
 
-        # Create transformed versions for optimization:
-        # Use softplus for hp1, hp2, and noise to ensure positivity.
-        # (For mu, we allow negative values, so we don't use softplus.)
-        opt_hp1_list = [torch.nn.Parameter(
-            torch.nn.functional.softplus(hp.detach())) for hp in orig_hp1_list]
-        opt_hp2_list = [torch.nn.Parameter(
-            torch.nn.functional.softplus(hp.detach())) for hp in orig_hp2_list]
-        if opt_sigma:
-            opt_noise = torch.nn.Parameter(
-                torch.nn.functional.softplus(orig_noise.detach()))
-        if opt_mu:
-            opt_mu_list = [torch.nn.Parameter(
-                mu.detach()) for mu in orig_mu_list]
+        # --------------------------------------------------
+        # Prior mean evaluated on training inputs
+        residual = y - self.prior_mean(self.Xtrain) # (Ns, 1)
 
-        # Include all parameters in the optimizer
-        if opt_mu and opt_sigma:
-            optimizer = torch.optim.Adam(
-                [*opt_hp1_list, *opt_hp2_list, opt_noise, *opt_mu_list], lr=lr)
-        elif opt_sigma and not opt_mu:
-            optimizer = torch.optim.Adam(
-                [*opt_hp1_list, *opt_hp2_list, opt_noise], lr=lr)
-        elif opt_mu and not opt_sigma:
-            optimizer = torch.optim.Adam(
-                [*opt_hp1_list, *opt_hp2_list, *opt_mu_list], lr=lr)
+        # Collect optimization parameters
+        params = self.kernel.optimization_parameters()  # returns [nn.Parameter, nn.Parameter]
+        original_noise_requires_grad = self.raw_noise.requires_grad
+
+        if not opt_noise:
+            self.raw_noise.requires_grad_(False)
         else:
-            optimizer = torch.optim.Adam(
-                [*opt_hp1_list, *opt_hp2_list], lr=lr)
+            params.append(self.raw_noise)
 
-        for _ in range(max_iter):
-            optimizer.zero_grad()
+        # Remove duplicate parameter references, if any
+        unique_params = []
+        seen = set()
+        for p in params:
+            if id(p) not in seen:
+                unique_params.append(p)
+                seen.add(id(p))
 
-            # Convert softplus-transformed parameters back:
-            hp1_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp1_list]
-            hp2_opt = [torch.nn.functional.softplus(hp) for hp in opt_hp2_list]
-            if opt_sigma:
-                noise_opt = torch.nn.functional.softplus(opt_noise)
+        if len(unique_params) == 0:
+            warnings.warn(
+                "No hyperparameters were found for optimization.",
+                RuntimeWarning,
+            )
+            self.trainGP(self.Xtrain, self.ytrain)
+            return
+
+        optimizer = torch.optim.Adam(unique_params, lr=lr)
+
+        # Precompute identity matrix and constants
+        eye = torch.eye(self.Ns, dtype=X.dtype, device=X.device)
+
+        log_2pi = X.new_tensor(math.log(2.0 * math.pi))
+
+        # Numerical jitter used only when Cholesky needs help
+        jitter = 1e-8   # if X.dtype == torch.float64 else 1e-6
+
+        # --------------------------------------------------
+        # Negative Log Marginal-likelihood optimization loop
+        # --------------------------------------------------
+        for _ in range(num_iter):
+            optimizer.zero_grad(set_to_none=True)
+
+            Kxx = self.kernel(X, X)
+            # Symmetrize against tiny floating-point asymmetries
+            Kxx = 0.5 * (Kxx + Kxx.T)
+            K_til = Kxx + (self.noise ** 2) * eye
+
+            # Cholesky Attempts with increasing Jitter
+            L = None
+            for attempt in range(5):
+                try:
+                    L = torch.linalg.cholesky(K_til)
+                    break
+
+                except RuntimeError:
+                    L = None
+                    jitter = jitter * (10.0 ** attempt)
+                    K_til += jitter * eye
+
+            # Compute Cost using Cholesky Factor
+            if L is not None:
+                # alpha = K^{-1}(y - m(X))
+                alpha = torch.cholesky_solve(residual, L)
+
+                # Quadratic term
+                quad_term = (residual.T @ alpha).squeeze()
+
+                # Stable log determinant from Cholesky factor
+                log_det = 2.0 * torch.log(torch.diagonal(L)).sum()
+            # Cost Fallback if Cholesky Decomposition fails
             else:
-                noise_opt = self.noise
-            if opt_mu:
-                mu_opt = opt_mu_list  # no transformation for mu
-            else:
-                mu_opt = self.mu_list
+                warnings.warn('Cholesky Decomposition failed for 5 attempts.'
+                              'Using pinv with hermitian=True', RuntimeWarning)
+                # Final fallback if Cholesky repeatedly fails
+                # jitter = base_jitter * 1e4
+                K_used = K_til + jitter * eye
 
-            K_til = KernelFunction(self.Xtrain, self.Xtrain, kernel_types=self.kernel_types,
-                                 hp1_list=hp1_opt, hp2_list=hp2_opt,
-                                 mu_list=mu_opt, combination=self.combination)
-            K_til += (noise_opt**2) * torch.eye(K_til.shape[0], device=self.device)
-            try:
-                L = torch.linalg.cholesky(K_til)
-                invK_til = torch.cholesky_inverse(L)
-            except RuntimeError:
-                invK_til = torch.linalg.pinv(K_til, hermitian=True)
-                warnings.warn(f"Cholesky failed. Used linalg.pinv with hermitian=True", RuntimeWarning)
+                K_pinv = torch.linalg.pinv(K_used, hermitian=True)
+                quad_term = (residual.T @ K_pinv @ residual).squeeze()
 
-            log_det = torch.logdet(K_til)
-            ll = -0.5 * (self.y @ invK_til @ self.y + log_det +
-                         self.y.shape[0] * torch.log(torch.tensor(2 * torch.pi)))
-            loss = -ll.squeeze()
+                sign, log_det = torch.linalg.slogdet(K_used)
+
+                if torch.any(sign <= 0):
+                    warnings.warn(
+                        "Covariance matrix had non-positive determinant during "
+                        "hyperparameter optimization. Using log|det(K)| fallback.",
+                        RuntimeWarning)
+
+            # Negative log marginal likelihood
+            loss = -0.5 * ( quad_term + log_det + (self.Ns * log_2pi) )
+
             loss.backward()
             optimizer.step()
 
-        # Restore optimized parameters back to the observable as nn.ParameterList objects.
-        self.hp1_list = nn.ParameterList(
-            [nn.Parameter(hp.detach()) for hp in opt_hp1_list])
-        self.hp2_list = nn.ParameterList(
-            [nn.Parameter(hp.detach()) for hp in opt_hp2_list])
-        self.noise = nn.Parameter(noise_opt.detach())
-        if opt_mu:
-            self.mu_list = nn.ParameterList(
-                [nn.Parameter(mu.detach()) for mu in opt_mu_list])
+        # Clear gradients and refresh GP matrix cache
+        optimizer.zero_grad(set_to_none=True)
+        self.raw_noise.requires_grad_(original_noise_requires_grad)
+        self.trainGP(self.Xtrain, self.ytrain)
 
-        # Retrain GP with the updated parameters.
-        self.trainGP(self.Xtrain, self.y)
 
 
 class GPObservablesManager:
     def __init__(self):
         self.observables = {}
 
-    def add_observable(self, index, d, ns, kernel_types=['Gaussian'], hp1_list=None, hp2_list=None, mu_list=None, noise=2e-6, combination='sum', device='cuda:0', m=200):
+    @property
+    def num_obs(self) -> int:
+        return len(self.observables)
+
+    def add_observable(
+            self, 
+            index : int, d : int, Ns : int, kernel : Kernel, 
+            prior_mean : MeanFunction | None = None, 
+            noise : float = 1e-4, 
+            dtype : torch.dtype = torch.float32, 
+            device : str | torch.device = 'cuda:0',
+            eps : float = 1e-8,
+            beta : float = 50.,
+            thresh : float = 1.0):
+        
         if index in self.observables:
             raise ValueError(f'Observable with index {index} already exists.')
-        self.observables[index] = GPObservable(
-            d, ns, kernel_types, hp1_list, hp2_list, mu_list, noise, combination, device, m)
+        
+        self.observables[index] = GPObservable(d, Ns, kernel, prior_mean, noise, dtype, device, eps, beta, thresh)
 
     def get_params(self, index):
         """
@@ -518,108 +456,169 @@ class GPObservablesManager:
             raise ValueError(f'Observable with index {index} does not exist.')
         return self.observables[index].get_parameters()
 
-    def get_all_params(self):
-        """
-        Returns a dictionary mapping each observable index to its parameters dictionary.
-        """
-        if not self.observables:
-            raise ValueError('No observables available in manager.')
-        return {idx: obs.get_parameters() for idx, obs in self.observables.items()}
-
-    def parameters(self, idx=None, get_mu_only=False):
-        """
-        Returns a list of all optimizable parameters (hp1, hp2, mu, noise) from all GPObservable instances.
-        """
-        if idx is None:
-            params = []
-            if get_mu_only is True:
-                for obs in self.observables.values():
-                    params.extend(obs.mu_list)
-            else:
-                for obs in self.observables.values():
-                    params.extend(obs.hp1_list)
-                    params.extend(obs.hp2_list)
-                    params.extend(obs.mu_list)
-                    params.append(obs.noise)
-        elif isinstance(idx, int):
-            pass
-        elif isinstance(idx, list) and all(isinstance(index, int) for index in idx):
-            pass
-        else:
-            raise TypeError(
-                'Argument idx can be None or object of class int or list')
-        return params
-
     def set_parameters(self, hp1_list=None, hp2_list=None, noise_list=None, mu_list=None):
-        i = 0
-        for obs in self.observables.values():
-            num_kernels = len(obs.kernel_types)
+        raise NotImplementedError
+        # i = 0
+        # for obs in self.observables.values():
+        #     num_kernels = len(obs.kernel_types)
 
-            if hp1_list is not None:
-                for k in range(num_kernels):
-                    obs.hp1_list[k].data = hp1_list[i + k].data.to(obs.device)
-            if hp2_list is not None:
-                for k in range(num_kernels):
-                    obs.hp2_list[k].data = hp2_list[i + k].data.to(obs.device)
-            if noise_list is not None:
-                obs.noise.data = noise_list[i].data.to(obs.device)
-            if mu_list is not None:
-                for k in range(num_kernels):
-                    obs.mu_list[k].data = mu_list[i + k].data.to(obs.device)
+        #     if hp1_list is not None:
+        #         for k in range(num_kernels):
+        #             obs.hp1_list[k].data = hp1_list[i + k].data.to(obs.device)
+        #     if hp2_list is not None:
+        #         for k in range(num_kernels):
+        #             obs.hp2_list[k].data = hp2_list[i + k].data.to(obs.device)
+        #     if noise_list is not None:
+        #         obs.noise.data = noise_list[i].data.to(obs.device)
+        #     if mu_list is not None:
+        #         for k in range(num_kernels):
+        #             obs.mu_list[k].data = mu_list[i + k].data.to(obs.device)
 
-            i += num_kernels
+        #     i += num_kernels
 
-    def set_random_hyperparameters(self, seed=42, scale=1.0):
+    def set_random_hyperparameters(
+            self,
+            seed: int = 42,
+            scale: float | list | tuple = 1.0
+        ):
         """
-        Assigns random hyperparameters (hp1, hp2, and optionally mu_list) to all observables.
+        Randomly initialize hp1 and hp2 for all kernel objects contained in all
+        GPObservable instances.
 
-        Args:
-            seed (int): Seed for reproducibility.
-            scale (float or list of three floats): If a single float, the same scale is applied to hp1, hp2, and mu.
-                If a list (or tuple) of three floats, they are used as the scales for hp1, hp2, and mu respectively.
+        Parameters
+        ----------
+        seed : int
+            Seed for reproducibility.
+
+        scale : float, list, or tuple
+            Controls the random initialization range.
+
+            If a single float:
+                hp1 ~ Uniform(0, scale)
+                hp2 ~ Uniform(0, 2*scale)
+
+            If a list/tuple of length 2:
+                scale = [scale_hp1, scale_hp2]
+
+                hp1 ~ Uniform(0, scale_hp1)
+                hp2 ~ Uniform(0, 2*scale_hp2)
+
+            If a list/tuple of length 3:
+                scale = [scale_hp1, scale_hp2, _]
+
+                The third entry is accepted for backward compatibility with the
+                older mu-list-based implementation, but is ignored.
+
+            Setting scale_hp1 or scale_hp2 to None leaves that parameter family
+            unchanged.
+
+        Notes
+        -----
+        - Only kernels inheriting from TwoPositiveParameterKernel are affected.
+        - Attractor locations `mu` are intentionally not modified.
+        - Other optional kernel parameters such as alpha or period are not modified.
         """
-        torch.manual_seed(seed)  # For reproducibility
 
-        # Determine scale factors for hp1, hp2, and mu
+        torch.manual_seed(seed)
+
+        # --------------------------------------------------
+        # Parse scale argument
+        # --------------------------------------------------
         if isinstance(scale, (list, tuple)):
-            if len(scale) == 3:
-                scale_hp1, scale_hp2, scale_mu = scale
+            if len(scale) == 2:
+                scale_hp1, scale_hp2 = scale
+            elif len(scale) == 3:
+                scale_hp1, scale_hp2, _ = scale # add mu_list later
             else:
                 raise ValueError(
-                    "Scale must be a single float or a list/tuple of three floats.")
+                    "scale must be either a single float, "
+                    "a list/tuple of length 2 or 3 ")
         else:
-            scale_hp1 = scale_hp2 = scale_mu = scale
+            scale_hp1 = scale
+            scale_hp2 = scale
+        
+        if scale_hp1 is not None and scale_hp1 <= 0:
+            raise ValueError('hp1 Scale must be None or positive '
+                             f'Recieved {scale_hp1}')
+        if scale_hp2 is not None and scale_hp2 <= 0:
+            raise ValueError('hp2 Scale must be None or positive '
+                             f'Recieved {scale_hp2}')
 
-        for obs in self.observables.values():
-            num_kernels = len(obs.kernel_types)
-            if scale_hp1 is not None:
-                obs.hp1_list = nn.ParameterList([
-                    nn.Parameter(scale_hp1 * torch.rand(1,
-                                                        device=obs.device, requires_grad=True))
-                    for _ in range(num_kernels)
-                ])
+        # --------------------------------------------------
+        # Internal helper:
+        # Convert a desired positive realized parameter value p
+        # into the corresponding raw parameter value satisfying
+        #
+        #     p = softplus(raw_p) + eps
+        # --------------------------------------------------
+        def _raw_from_positive(
+                positive_value: torch.Tensor,
+                eps: float,
+                beta : float = 10.0,
+                thresh : float = 5.0,
+            ) -> torch.Tensor:
 
-            if scale_hp2 is not None:
-                obs.hp2_list = nn.ParameterList([
-                    nn.Parameter(2. * scale_hp2 * torch.rand(1,
-                                                             device=obs.device, requires_grad=True))
-                    for _ in range(num_kernels)
-                ])
+            shifted = positive_value - eps
 
-            # Randomize mu_list if it exists (i.e. is not None)
-            if obs.mu_list is not None and scale_mu is not None:
-                obs.mu_list = nn.ParameterList([
-                    nn.Parameter((-scale_mu/2) + scale_mu * torch.rand(*p.shape,
-                                 device=obs.device, requires_grad=True))
-                    for p in obs.mu_list
-                ])
+            # Clamp the softplus argument away from zero for numerical safety.
+            tiny = torch.finfo(positive_value.dtype).tiny
+            shifted = torch.clamp(shifted, min=tiny)
+
+            return torch.where(
+                beta * shifted > thresh,
+                shifted,
+                torch.log(torch.expm1(beta * shifted)) / beta
+            )
+
+        # --------------------------------------------------
+        # Avoid randomizing the same shared kernel module multiple times
+        # if a kernel object is shared across observables.
+        # --------------------------------------------------
+        visited_modules = set()
+
+        with torch.no_grad():
+
+            for obs in self.observables.values():
+
+                # Recursively visits:
+                #   - the outer kernel itself
+                #   - child kernels inside SumKernel / ProductKernel
+                for kernel_module in obs.kernel.modules():
+
+                    if id(kernel_module) in visited_modules:
+                        continue
+
+                    visited_modules.add(id(kernel_module))
+
+                    if not isinstance(kernel_module, TwoPositiveParameterKernel):
+                        continue
+
+                    # Randomize hp1
+                    if scale_hp1 is not None:
+
+                        hp1_rand = scale_hp1 * torch.rand_like(
+                            kernel_module.raw_hp1).clamp(min=kernel_module.eps)
+
+                        raw_hp1_rand = _raw_from_positive(hp1_rand, kernel_module.eps)
+
+                        kernel_module.raw_hp1.copy_(raw_hp1_rand)
+
+                    # Randomize hp2
+                    if scale_hp2 is not None:
+                        
+                        hp2_rand = 2.0 * scale_hp2 * torch.rand_like(
+                            kernel_module.raw_hp2).clamp(min=kernel_module.eps)
+
+                        raw_hp2_rand = _raw_from_positive(hp2_rand, kernel_module.eps)
+
+                        kernel_module.raw_hp2.copy_(raw_hp2_rand)
 
     def train_observable(self, index, Xtrain, ytrain):
         if index not in self.observables:
             raise ValueError(f'Observable with index {index} does not exist.')
         self.observables[index].trainGP(Xtrain, ytrain)
 
-    def predict_mean(self, index, Xq):
+    def predict_mean(self, index : int, Xq : torch.Tensor) -> torch.Tensor:
         if index not in self.observables:
             raise ValueError(f'Observable with index {index} does not exist.')
         return self.observables[index].predictMean(Xq)
@@ -629,10 +628,10 @@ class GPObservablesManager:
             raise ValueError(f'Observable with index {index} does not exist.')
         return self.observables[index].predictCov(Xq)
 
-    def optimize_hyperparameters(self, max_iter=100, lr=0.01, opt_mu=False, opt_sigma=False):
+    def optimize_hyperparameters(self, num_iter=100, lr=0.01, opt_noise=True):
         for obs in self.observables.values():
             obs.optimize_hyperparameters(
-                max_iter, lr, opt_mu=opt_mu, opt_sigma=opt_sigma)
+                num_iter, lr, opt_noise=opt_noise)
 
     def visualize2D(self, resolution=50, range_x=(-1, 1), range_y=(-1, 1)):
         """
@@ -758,7 +757,9 @@ class GPObservablesManager:
                   for cell, width in zip(row, col_widths)))
 
 
-def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor, nT, stateAug=False):
+def getKoopman(manager: GPObservablesManager,
+               X :torch.Tensor, Xplus : torch.Tensor,
+               nT : int, stateAug : bool = False) -> tuple[torch.Tensor]:
     """
     Compute Koopman A matrix using the manager for GPObservables.
 
@@ -768,7 +769,7 @@ def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor,
         Xall (torch.Tensor): n x (N+1) matrix of state trajectory.
         nT (float): number of trajectories in training dataset
 
-    Returns:
+    Returns: tuple[torch.Tensor]
         A (torch.Tensor): p x p linear state transition matrix.
         C (torch.Tensor): n x p output matrix.
     """
@@ -776,19 +777,23 @@ def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor,
     if not isinstance(manager, GPObservablesManager):
         raise ValueError(
             'Expected argument manager to be object of class GPObservablesManager')
+    
+    if X.shape != Xplus.shape:
+        raise ValueError('X and Xplus should be the same shape. '
+                         f'Recieved {X.shape} and {Xplus.shape} instead.')
 
-    n = Xall.shape[0]       # dimensionality of original system
-    N = (Xall.shape[1])//nT - 1  # Number of time steps in each trajectory
-    p = len(indices)        # number of observables
+    # n = Xall.shape[0]       # dimensionality of original system
+    # N = (Xall.shape[1])//nT - 1  # Number of time steps in each trajectory
+    # p = len(indices)        # number of observables
+    nx = X.shape[0]
+    N = X.shape[1]//nT
+    nz = manager.num_obs
+    device = manager.observables[0].device
+    X, Xplus = X.to(device=device), Xplus.to(device=device)
 
-    X = torch.cat([Xall[:, j*(N+1):j*(N+1)+N] for j in range(nT)],
-                  dim=1)         # Data matrix from original system
-    Xplus = torch.cat([Xall[:, j*(N+1)+1:j*(N+1)+N+1]
-                      for j in range(nT)], dim=1)  # Time-shifted data matrix
-
-    M = torch.zeros((p, N*nT), device=Xall.device)
-    Mplus = torch.zeros((p, N*nT), device=Xall.device)
-    for i in range(p):
+    M = torch.zeros((nz, N*nT), device=device)
+    Mplus = torch.zeros((nz, N*nT), device=device)
+    for i in range(nz):
         M[i, :] = torch.transpose(manager.predict_mean(i, X), dim0=0, dim1=-1)
         Mplus[i, :] = torch.transpose(
             manager.predict_mean(i, Xplus), dim0=0, dim1=-1)
@@ -798,13 +803,18 @@ def getKoopman(manager: GPObservablesManager, indices: list, Xall: torch.tensor,
         Mplus = torch.vstack((Xplus, Mplus))
 
     # Compute C(z) and A(z)
-    M_pinv = torch.linalg.pinv(M)
+    try:
+        L = torch.linalg.cholesky(M @ M.mT +
+                (1e-8) * torch.eye(nz, device=M.device))
+        M_pinv = torch.cholesky_solve(M.mT, L)
+    except RuntimeError:
+        M_pinv = torch.linalg.pinv(M)
+    
     A = Mplus @ M_pinv
 
     if stateAug:
-        C = torch.zeros((n, n+p))
-        for i in range(n):
-            C[i, i] = 1.
+        C = torch.stack([torch.eye(nx), 
+                         torch.zeros([nx, nz])], dim=1).to(device=M.device)
     else:
         C = X @ M_pinv
 
@@ -870,37 +880,36 @@ def getKoopman_control(manager, indices, X, Xplus, U, nT, stateAug=False):
 
 
 if __name__ == "__main__":
+    from kernels import GaussianKernel
+    from prior_means import MonomialMean
     # Create the GPObservablesManager
     manager = GPObservablesManager()
 
     # 1. Add Observables with multiple kernel types and combination methods
+    Ns=50
     manager.add_observable(
-        index=0, d=2, ns=5,
-        kernel_types=['Gaussian', 'ThinSpline'],
-        hp1_list=[torch.tensor(1.0), torch.tensor(0.5)],
-        hp2_list=[torch.tensor(0.5), torch.tensor(2.0)],
-        combination='sum', noise=2e-1
+        index=0, d=1, Ns=50,
+        kernel=GaussianKernel(hp1=1.0, hp2=1.5), device='cpu'
     )
 
     manager.add_observable(
-        index=1, d=2, ns=5,
-        kernel_types=['Gaussian', 'InverseQuadratic'],
-        hp1_list=[torch.tensor(0.8), torch.tensor(1.2)],
-        hp2_list=[torch.tensor(1.0), torch.tensor(0.7)],
-        combination='product'
+        index=1, d=1, Ns=50,
+        kernel=GaussianKernel(hp1=2.0, hp2=0.5, device='cpu'),
+        prior_mean=MonomialMean([2.0]), device='cpu'
     )
 
     # 2. Prepare synthetic training data (2D inputs, 5 samples)
-    X_train = torch.linspace(0., 1., steps=5).view(1, 5)
-    X_train = torch.vstack([X_train, 2*X_train])
-    y_train = torch.sin(torch.linspace(0., 1., steps=5).view(5, 1))
+    X_train = torch.linspace(0., 20., steps=Ns).unsqueeze(dim=0)
+    # X_train = torch.vstack([X_train, 2*X_train])
+    y_train = ((0.025 * X_train ** 2) + 2 * (torch.sin(1.1 * X_train)) + 2 * torch.randn_like(X_train)).mT
 
     # 3. Train the observables
     manager.train_observable(0, X_train, y_train)  # Train first observable
     manager.train_observable(1, X_train, y_train)  # Train second observable
+    manager.optimize_hyperparameters(num_iter=20, lr=0.001)
 
     # 4. Predict mean and covariance for a query input (2D query, 3 samples)
-    X_query = torch.randn(2, 3)
+    X_query = 15 * torch.rand(1, 10)
     mean_pred_0 = manager.predict_mean(
         0, X_query)  # Predict mean for observable 0
     # Predict covariance for observable 0
@@ -911,31 +920,36 @@ if __name__ == "__main__":
     # Predict covariance for observable 1
     cov_pred_1 = manager.predict_covariance(1, X_query)
 
-    print(f"Mean prediction for Observable 0:\n{mean_pred_0}")
-    print(f"Covariance prediction for Observable 0:\n{cov_pred_0}")
+    # print(f"Mean prediction for Observable 0:\n{mean_pred_0}")
+    # print(f"Covariance prediction for Observable 0:\n{cov_pred_0}")
 
-    print(f"Mean prediction for Observable 1:\n{mean_pred_1}")
-    print(f"Covariance prediction for Observable 1:\n{cov_pred_1}")
+    # print(f"Mean prediction for Observable 1:\n{mean_pred_1}")
+    # print(f"Covariance prediction for Observable 1:\n{cov_pred_1}")
 
     # 5. Optimize hyperparameters for all observables
-    manager.optimize_hyperparameters(max_iter=10, lr=0.001)
+    
+    plt.plot(X_train.squeeze().detach(), y_train.squeeze().detach(), label='Data')
+    plt.plot(X_query.squeeze().detach(), mean_pred_0.squeeze().detach(), label='Naive', linestyle=None, marker='o')
+    plt.plot(X_query.squeeze().detach(), mean_pred_1.squeeze().detach(), label='With prior', linestyle=None, marker='+')
+    plt.grid()
+    plt.show()
 
-    # 6. Get optimized hyperparameters for observable 0 and 1
-    params_0 = manager.get_params(0)
-    params_1 = manager.get_params(1)
+    # # 6. Get optimized hyperparameters for observable 0 and 1
+    # params_0 = manager.get_params(0)
+    # params_1 = manager.get_params(1)
 
-    print(f"Optimized hyperparameters for Observable 0: {params_0}")
-    print(f"Optimized hyperparameters for Observable 1: {params_1}")
+    # print(f"Optimized hyperparameters for Observable 0: {params_0}")
+    # print(f"Optimized hyperparameters for Observable 1: {params_1}")
 
-    # 7. Setting random hyperparameters for all observables
-    manager.set_random_hyperparameters()
+    # # 7. Setting random hyperparameters for all observables
+    # manager.set_random_hyperparameters()
 
-    # 7. Get all parameters for all observables in the manager
-    all_params = manager.get_all_params()
-    print(f"All randomized hyperparameters for all observables: {all_params}")
+    # # 7. Get all parameters for all observables in the manager
+    # all_params = manager.get_all_params()
+    # print(f"All randomized hyperparameters for all observables: {all_params}")
 
-    # 8. Count the number of observables
-    observable_count = GPObservable.count_Observables()
-    print(f"Total number of observables: {observable_count}")
+    # # 8. Count the number of observables
+    # observable_count = GPObservable.count_Observables()
+    # print(f"Total number of observables: {observable_count}")
 
-    manager.visualize2D()
+    # manager.visualize2D()

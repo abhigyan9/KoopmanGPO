@@ -25,7 +25,9 @@ def _as_tensor(value, *, device=None, dtype=None) -> torch.Tensor:
     return torch.tensor(value, device=device, dtype=dtype)
 
 
-def _inverse_softplus(y: torch.Tensor, eps: float = 1e-12, thresh: float = 20.0) -> torch.Tensor:
+def _inverse_softplus(
+        y: torch.Tensor, eps: float = 1e-12, 
+        beta : float = 20.0, thresh: float = 1.0) -> torch.Tensor:
     """
     Numerically stable inverse of softplus for y > 0.
 
@@ -34,16 +36,16 @@ def _inverse_softplus(y: torch.Tensor, eps: float = 1e-12, thresh: float = 20.0)
     y = torch.clamp(y, min=eps)
 
     return torch.where(
-        y > thresh,
+        beta * y > thresh,
         y,
-        torch.log(torch.expm1(y)),
+        torch.log(torch.expm1(beta * y)) / beta,
     )
 
 
 def _positive_raw_parameter(
     value,
     *,
-    eps: float,
+    eps: float, beta : float = 20.0, thresh : float = 1.0,
     device=None,
     dtype=None,
 ) -> nn.Parameter:
@@ -57,14 +59,16 @@ def _positive_raw_parameter(
     # initialize raw from value - eps.
     shifted = torch.clamp(value_t - eps, min=eps)
 
-    return nn.Parameter(_inverse_softplus(shifted))
+    return nn.Parameter(_inverse_softplus(shifted, beta=beta, thresh=thresh))
 
 
-def _positive_from_raw(raw: torch.Tensor, eps: float) -> torch.Tensor:
+def _positive_from_raw(raw: torch.Tensor, eps: float,
+                       beta : float = 20.0,
+                       thresh : float = 1.0) -> torch.Tensor:
     """
     Transform an unconstrained raw parameter into a strictly positive value.
     """
-    return F.softplus(raw) + eps
+    return F.softplus(raw, beta=beta, threshold=thresh) + eps
 
 
 def _validate_pair(
@@ -206,35 +210,32 @@ class TwoPositiveParameterKernel(Kernel):
         hp1: float | torch.Tensor = 1.0,
         hp2: float | torch.Tensor = 1.0,
         *,
-        eps: float = 1e-6,
-        device=None,
-        dtype=None,
-    ):
+        eps: float = 1e-8,
+        beta : float = 20.0, thresh : float = 1.0,
+        device=None, dtype=None):
         super().__init__()
 
         self.eps = eps
+        self.beta = beta
+        self.thresh = thresh
 
         self.raw_hp1 = _positive_raw_parameter(
-            hp1,
-            eps=eps,
-            device=device,
-            dtype=dtype,
-        )
+            hp1, eps=eps, beta=self.beta, thresh=self.thresh,
+            device=device, dtype=dtype)
 
         self.raw_hp2 = _positive_raw_parameter(
-            hp2,
-            eps=eps,
-            device=device,
-            dtype=dtype,
-        )
+            hp2, eps=eps, beta=self.beta, thresh=self.thresh,
+            device=device, dtype=dtype)
 
     @property
     def hp1(self) -> torch.Tensor:
-        return _positive_from_raw(self.raw_hp1, self.eps)
+        return _positive_from_raw(self.raw_hp1, self.eps,
+                                  beta=self.beta, thresh=self.thresh)
 
     @property
     def hp2(self) -> torch.Tensor:
-        return _positive_from_raw(self.raw_hp2, self.eps)
+        return _positive_from_raw(self.raw_hp2, self.eps,
+                                  beta=self.beta, thresh=self.thresh)
 
     def optimization_parameters(
         self,
@@ -242,6 +243,33 @@ class TwoPositiveParameterKernel(Kernel):
     ) -> List[nn.Parameter]:
         return [self.raw_hp1, self.raw_hp2]
 
+
+class TwoParameterKernel(Kernel):
+    
+    def __init__(self,
+                 hp1 : float | torch.Tensor = 1.0,
+                 hp2 : float | torch.Tensor = 1.0,
+                 *,
+                 eps : float = 1e-8,
+                 device = None, dtype = None):
+        super().__init__()
+        self.eps = eps
+        self.raw_hp1 = nn.Parameter(_as_tensor(hp1, 
+                        device=device, dtype=dtype).clamp(min=self.eps))
+        self.raw_hp2 = nn.Parameter(_as_tensor(hp2, 
+                        device=device, dtype=dtype).clamp(min=self.eps))
+    
+    @property
+    def hp1(self) -> torch.Tensor:
+        return torch.clamp(self.raw_hp1, min=self.eps)
+
+    @property
+    def hp2(self) -> torch.Tensor:
+        return torch.clamp(self.raw_hp2, min=self.eps)
+    
+    def optimization_parameters(
+            self, opt_mu : bool = False) -> List[nn.Parameter]:
+        return [self.raw_hp1, self.raw_hp2]
 
 # ============================================================
 # Stationary kernels

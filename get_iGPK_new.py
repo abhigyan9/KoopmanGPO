@@ -6,6 +6,28 @@ import time
 import numpy as np
 import math
 
+from itertools import combinations_with_replacement
+
+def generate_monomial_powers(nx: int, total_orders=(2, 3)):
+    """
+    Return exponent tuples for all unique monomials whose total degree
+    is in `total_orders`.
+
+    Example for nx=2:
+        degree 2: (2,0), (1,1), (0,2)
+        degree 3: (3,0), (2,1), (1,2), (0,3)
+    """
+    power_list = []
+
+    for order in total_orders:
+        for combo in combinations_with_replacement(range(nx), order):
+            powers = [0] * nx
+            for idx in combo:
+                powers[idx] += 1
+            power_list.append(tuple(powers))
+
+    return power_list
+
 ## --- COST FUNCTION --- ##
 
 
@@ -84,35 +106,34 @@ def _standardize_G_shape(G, S, r):
 
 
 @torch.no_grad()
-def build_G_cache(manager, X, Xplus):
+def build_G_cache(manager, X, Xplus) -> tuple[torch.Tensor]:
     """
     Build detached G caches for Z-only optimization.
 
     Returns
     -------
-    G_X      : (p, S, r)
-    G_Xplus  : (p, S, r)
+    G_X      : (nz, S, r)
+    G_Xplus  : (nz, S, r)
 
     where:
-        p = number of observables
+        nz = number of observables
         S = N*nT
         r = number of virtual targets
     """
-    p = len(manager.observables)
-    r = manager.observables[0].y.shape[0] # Z.shape[0]
+    nz = manager.num_obs    # len(manager.observables)
+    r = manager.observables[0].Ns # Z.shape[0]
     S = X.shape[1]
 
-    G_X_list = []
-    G_Xplus_list = []
+    G_X_list, G_Xplus_list = [], []
 
-    for i in range(p):
+    for i in range(nz):
         obs = manager.observables[i]
 
-        Gi = obs.forward_G(X)
-        Gpi = obs.forward_G(Xplus)
+        Gi = obs.forward_G(X)       # X : (nx, N*nT) -> Gi : (N*nT, r)
+        Gpi = obs.forward_G(Xplus)  # (N*nT, r)
 
-        Gi = _standardize_G_shape(Gi, S, r)
-        Gpi = _standardize_G_shape(Gpi, S, r)
+        # Gi = _standardize_G_shape(Gi, S, r)
+        # Gpi = _standardize_G_shape(Gpi, S, r)
 
         G_X_list.append(Gi)
         G_Xplus_list.append(Gpi)
@@ -124,24 +145,20 @@ def build_G_cache(manager, X, Xplus):
 
 
 def get_cost_simple_fast(
-    Z, X, Xplus, manager,
-    G_X, G_Xplus, nT=1,
+    Z, X, G_X, G_Xplus,
     lambda1=1.0, lambda2=1.0, lambda3=1.0,
-    jitter=1e-6,
-    squared=True,
-):
+    jitter=1e-6, squared=True):
     """
     Fast version of get_cost_simple.
 
     Avoids explicitly forming:
         M_pinvM = M_pinv @ M
 
-    This prevents construction of an (N*nT) x (N*nT) matrix.
     """
 
     p = Z.shape[1]
-    dtype = X.dtype
-    device = X.device
+    dtype = G_X.dtype
+    device = G_X.device
 
     # ------------------------------------------------------------
     # 1. Build lifted mean matrices M and Mplus
@@ -153,17 +170,15 @@ def get_cost_simple_fast(
     # 2. Compute Gram matrix in lifted space
     # ------------------------------------------------------------
     eye_p = torch.eye(p, dtype=dtype, device=device)
-    # Gram = M @ M.mT + jitter * eye_p        # (p, p)
+    Gram = M @ M.mT # (p, p)
 
-    # Use Cholesky solve, not pinv.
-    # If this fails often, increase jitter rather than falling back to pinv.
     try:
-        L = torch.linalg.cholesky(M @ M.mT + jitter * eye_p)
+        L = torch.linalg.cholesky(Gram + jitter * eye_p)
     except RuntimeError:
         try:
-            L = torch.linalg.cholesky(M @ M.mT + (10*jitter) * eye_p)
+            L = torch.linalg.cholesky(Gram + (10*jitter) * eye_p)
         except RuntimeError:
-            L = torch.linalg.cholesky(M @ M.mT + (100*jitter) * eye_p)
+            L = torch.linalg.cholesky(Gram + (100*jitter) * eye_p)
 
     # ------------------------------------------------------------
     # 3. Compute B P_M without forming P_M
@@ -208,7 +223,7 @@ def get_iGPK(
     routine: str = "Z_only",        # "Z_only" or "SpacedOpt"
     train_method: str = "Horizon",  # "Horizon" or "K-Means"
     hp_scale: list = [None, 1.0, None],  # [hp1, hp2, mu]
-    device: str = "cuda:0",
+    device: str | torch.device = "cuda:0",
     seed_z: int = 1234,
     seed_hp: int = 1234
 ):
@@ -217,59 +232,96 @@ def get_iGPK(
 
     NOTE: Data loading & noise addition remain outside. Pass prepped SimData in.
     """
-    torch.manual_seed(seed_z)
-    SimData = SimData.float().to(device)
+    SimData = SimData.to(dtype=torch.float32)
 
     # Shapes & basic splits
-    n = SimData.shape[1]
+    nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    p = lifting_order
+    nz = int(lifting_order)
 
+    t0 = time.perf_counter() 
     # Build concatenated matrices and ICs from SimData
-    Xall = torch.cat([SimData[j, :, :]
-                     for j in range(nTrain)], dim=1)     # n x (nTrain*(N+1))
+    # Xall = torch.cat([SimData[j, :, :]
+    #                  for j in range(nTrain)], dim=1)    # (n, (N+1)*nTrain)
     X = torch.cat([SimData[j, :, 0:N]
-                  for j in range(nTrain)], dim=1)     # n x (nTrain*N)
+                  for j in range(nTrain)], dim=1)       # (n, N*nTrain)
     Xplus = torch.cat([SimData[j, :, 1:]
-                      for j in range(nTrain)], dim=1)     # n x (nTrain*N)
+                      for j in range(nTrain)], dim=1)   # (n, N*nTrain)
 
-    ICsetTrain = torch.cat([SimData[j, :, 0].view(n, 1)
+    ICsetTrain = torch.cat([SimData[j, :, 0].view(nx, 1)
                            for j in range(nTrain)], dim=1)
-    ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
+    ICsetTest = torch.cat([SimData[j, :, 0].view(nx, 1)
                           for j in range(nTrain, nTrain + nTest)], dim=1)
 
+    ObsManager = gpk.GPObservablesManager()
+
     # Initialize manager & decision variable Z (training grid)
-    if train_method == "Horizon":
-        Xtrain = torch.cat([X[:, j*N: j*N + 1]
-                           for j in range(nTrain)], dim=1)  # n x (nTrain)
+    if train_method == "Zero-Mean":
+        Xtrain = torch.cat([X[:, j*N : j*N +1]
+                            for j in range(nTrain)], dim=1)  # (nx, nTrain)
+        torch.manual_seed(seed=seed_z)
         Z = torch.nn.Parameter(torch.rand(
-            Xtrain.shape[1], p, device=device))   # Virtual Targets
-        ObsManager = gpk.GPObservablesManager()
-        for i in range(int(p)):
+            nTrain, nz, device=device))   # Virtual Targets, (nTrain, nz)
+        for i in range(nz):
+            kernel = gpk.GaussianKernel()
             ObsManager.add_observable(
-                index=i, d=n, ns=nTrain, kernel_types=[
-                    'Gaussian'],
-                combination='sum', noise=1e-4, device=device
-            )
-        # for i in range(int(p/2), p):
-        #     ObsManager.add_observable(
-        #         index=i, d=n, ns=nTrain, kernel_types=[
-        #             'Gaussian', 'ExpSineSqr'],
-        #         combination='product', noise=1e-4, m=500, device=device
-        #     )
-        for i in range(p):
-            ObsManager.train_observable(i, Xtrain, Z[:, i])
-        torch.manual_seed(seed_hp)
-        ObsManager.set_random_hyperparameters(
-            scale=hp_scale, seed=seed_hp)
+                index=i, d=nx, Ns=nTrain, kernel=kernel,
+                prior_mean=None, noise=1e-4, device=device,
+                beta=10.0, thresh=2.0)
+        ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
+        for i in range(nz):
+            ObsManager.train_observable(i, Xtrain, Z[:, i].unsqueeze(dim=1))
+
+    elif train_method == "Forward-Backward":
+        Xtrain_for = torch.cat([X[:, j*N] for j in range(nTrain)], dim=1)  # (nx, nTrain)
+        Xtrain_back = torch.cat([X[:, j*N + N - 1] for j in range(nTrain)], dim=1)
+        Xtrain = torch.stack([Xtrain_for, Xtrain_back], dim=1)  # (nx, nTrain*2)
+        Z = torch.nn.Parameter(torch.rand(nTrain*2, nz, device=device)) # (nTrain*2, nz)
+        for i in range(nz):
+            kernel = gpk.GaussianKernel()
+            ObsManager.add_observable(
+                index=i, d=nx, Ns=nTrain*2, kernel=kernel,
+                prior_mean=None, noise=1e-4, device=device)
+        
+        ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
+            
+        for i in range(nz):
+            ObsManager.train_observable(i, Xtrain, Z[:, i].unsqueeze(dim=1))
+
+    elif train_method == "Monomials":
+        Xtrain = torch.cat([X[:, j*N: j*N + 1]
+                            for j in range(nTrain)], dim=1)  # (nx, nTrain)
+        torch.manual_seed(seed=seed_z)
+        Z = torch.nn.Parameter(torch.rand(
+            nTrain, nz, device=device))   # Virtual Targets, (nTrain, nz)
+        
+        monomial_powers = generate_monomial_powers(nx, total_orders=(2, 3))
+        num_monomial_means = min(nz, len(monomial_powers))
+        for i in range(nz):
+            kernel = gpk.GaussianKernel()
+
+            if i < num_monomial_means:
+                prior_mean = gpk.MonomialMean(powers=monomial_powers[i])
+            else:
+                prior_mean = None
+            
+            ObsManager.add_observable(
+                index=i, d=nx, Ns=nTrain, kernel=kernel,
+                prior_mean=prior_mean, noise=1e-4, device=device)
+
+        ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
+            
+        for i in range(nz):
+            ObsManager.train_observable(i, Xtrain, Z[:, i].unsqueeze(dim=1))
 
     elif train_method == "K-Means":
+        raise NotImplementedError
         Xtrain = torch.cat([X[:, j*N: j*N + 1] for j in range(nTrain)], dim=1)
         Z = torch.nn.Parameter(torch.rand(
-            Xtrain.shape[1], p, device=device))   # Virtual Targets
+            nTrain, nz, device=device))   # Virtual Targets
         ObsManager = gpk.GPObservablesManager()
-        centroids = gpk.get_kmeans(X, num_centers=p)
-        for i in range(p):
+        centroids = gpk.get_kmeans(X, num_centers=nz)
+        for i in range(nz):
             ObsManager.add_observable(
                 index=i, d=n, ns=nTrain,
                 kernel_types=['ExplicitAttractor', 'Gaussian'],
@@ -293,20 +345,22 @@ def get_iGPK(
     G_X, G_Xplus = build_G_cache(ObsManager, X, Xplus)
 
     optimizer = torch.optim.SGD(
-        [Z], lr=learn_rate, momentum=0.85, nesterov=True)
+        [Z], lr=learn_rate, momentum=0.825, nesterov=True)
+    
     while iter < max_iter:
         optimizer.zero_grad(set_to_none=True)
-        cost = get_cost_simple_fast(Z, X, Xplus, ObsManager, G_X, G_Xplus,
-                               nT=nTrain, lambda1=lam1, lambda2=lam2, lambda3=lam3)
+        cost = get_cost_simple_fast(Z, X.to(device=device), G_X, G_Xplus,
+                               lambda1=lam1, lambda2=lam2, lambda3=lam3)
         cost.backward()
         optimizer.step()
         cost_history.append(cost.item())
         iter += 1
 
-        if iter > 1000:
+        if iter > 1000: # STOPPING CONDITION
             rel_change = float((cost_history[-50] - cost_history[-1]) / cost_history[-50])
             if rel_change > 0 and rel_change < 1e-5:
                 break
+
         if (routine == 'alternating') and (iter < max_iter) and ((iter % 1000) == 0):
             ObsManager.optimize_hyperparameters(
                 opt_mu=False, opt_sigma=False, max_iter=2, lr=learn_rate)
@@ -315,18 +369,21 @@ def get_iGPK(
 
     # === Retrain GPs at optimal Z & (optionally) optimize hp ===
     optimal_Z = Z.detach()
-    for i in range(p):
-        ObsManager.train_observable(i, Xtrain, optimal_Z[:, i])
+    for i in range(nz):
+        ObsManager.train_observable(i, Xtrain, optimal_Z[:, i].unsqueeze(dim=1))
 
-    ObsManager.optimize_hyperparameters(
-        opt_mu=False, opt_sigma=True, max_iter=250, lr=0.01)
-    ObsManager.print_parameters(get_mu=False)
+    ObsManager.optimize_hyperparameters(num_iter=250, lr=0.02, opt_noise=True)
+
+    # ObsManager.print_parameters(get_mu=False)
 
     # === Koopman A, C ===
-    ObsList = [i for i in range(p)]
-    A, C = gpk.getKoopman(ObsManager, ObsList, Xall, nTrain, stateAug=False)
+    A, C = gpk.getKoopman(ObsManager, X, Xplus, nTrain, stateAug=False)
+    t_iGPK = time.perf_counter() - t0
 
-    # === Simulate & evaluate ===
+    # ===================================
+    # ======= Simulate & evaluate =======
+    # ===================================
+    
     #   Train split (offset 0), Test split (offset nTrain)
     XhatTrain, XcvTrain, TrainNRMSE = gpk.sim_and_eval(
         ObsManager, A, C, ICsetTrain, SimData, traj_offset=0)
@@ -340,18 +397,19 @@ def get_iGPK(
         "ICsetTrain": ICsetTrain.detach().cpu(),
         "ICsetTest":  ICsetTest.detach().cpu(),
         "Train": {
-            "Xhat": XhatTrain,      # (nTrain, n, N)
-            "Xcv":  XcvTrain,       # (nTrain, n, n, N)
-            "NRMSE": TrainNRMSE     # (nTrain, n)
+            "Xhat": XhatTrain,      # (nTrain, nx, N)
+            "Xcv":  XcvTrain,       # (nTrain, nx, nx, N)
+            "NRMSE": TrainNRMSE     # (nTrain, nx)
         },
         "Test": {
-            "Xhat": XhatTest,       # (nTest, n, N)
-            "Xcv":  XcvTest,        # (nTest, n, n, N)
-            "NRMSE": TestNRMSE      # (nTest, n)
+            "Xhat": XhatTest,       # (nTest, nx, N)
+            "Xcv":  XcvTest,        # (nTest, nx, nx, N)
+            "NRMSE": TestNRMSE      # (nTest, nx)
         },
         "history": {
             "cost": torch.tensor(cost_history).detach().cpu(),
-            "iters": iter
+            "iters": iter,
+            "opt_time": t_iGPK,
         },
     }
 
@@ -432,14 +490,10 @@ if __name__ == "__main__":
                             intensity=0.0, seed=1234)
 
     print(f'==== Starting iGPK Model Identification ====')
-    t0 = time.perf_counter()
     results = get_iGPK(SimData, nTrain, nTest, lifted_order,
                        MAX_ITER, learn_rate=0.0001,
                        opt_weights=[1.0, 1.0, 0.0], routine=routine,
-                       train_method="Horizon", hp_scale=[None, HP_INIT, None])
-    t_iGPK = time.perf_counter() - t0
-    print(
-        f'{lifted_order}-D iGPK model-ID with {results["history"]["iters"]}-epochs, finished in {t_iGPK:.2f} seconds')
+                       train_method="Zero-Mean", hp_scale=[None, HP_INIT, None])
 
     # unpack iGPK
     ObsManager = results["ObsManager"]
@@ -448,15 +502,17 @@ if __name__ == "__main__":
         "Xhat"], results["Train"]["Xcv"], results["Train"]["NRMSE"]
     XhatTest,  XcvhatTest,  TestNRMSE = results["Test"][
         "Xhat"],  results["Test"]["Xcv"],  results["Test"]["NRMSE"]
-
-    z_norm = torch.tensor([ObsManager.observables[i].y.norm() for i in range(lifted_order)])
-    print(f'Min Norm of Z vectors:      {z_norm.min():.3e}')
-    print(f'Median Norm of Z vectors:   {z_norm.median():.3e}')
-    print(f'Mean Norm of Z vectors:     {z_norm.mean():.3e}')
-    print(f'Max Norm of Z vectors:      {z_norm.max():.3e}')
+    t_iGPK, total_epochs = results['history']['opt_time'], results[
+        "history"]['iters']
+    
+    print(f'Lifted Model Order:         {lifted_order:d}')
+    print(f'Total Epochs executed:      {total_epochs:d}')
+    print(f'Learning Time:              {t_iGPK:.2f} seconds')
     
     gpk.plot_eigen(A_igpk)
-
+    gpk.MatViz(C_igpk, 'heat')
+    TrainNRMSE = TrainNRMSE.clamp(max=1.5)
+    TestNRMSE = TestNRMSE.clamp(max=1.5)
     gpk.plot_NRMSE_metrics([TrainNRMSE*100], [TestNRMSE*100], ['iGPK'])
 
     # 6) indices + timebase
@@ -466,7 +522,6 @@ if __name__ == "__main__":
     time_arr = torch.arange(0., ts * (SimData.shape[2] - 1), ts)
     print(f'Median Test NMRSE:          {100*TestNRMSE.mean(dim=1).median():.2f}%')
     print(f'Mean Test NMRSE:            {100*TestNRMSE.mean(dim=1).mean():.2f}%')
-    print(f'Example Initial Covariance {XcvhatTest[5, :, :, 0]}')
 
     # 7) pack models for overlay plot
     models = [
