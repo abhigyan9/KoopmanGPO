@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 
 # import functions from autonomous.py
 from .autonomous import f_UDO, f_VDP, f_Lorenz, f_LotkaVolterra, f_SDP, f_PWL1, df_PWL, f_RVDP, df_scalarNL
-from .autonomous import f_IPP, f_RR, f_RBDP
+from .autonomous import f_IPP, f_RR, f_RBDP, f_Lorenz96
 from .autonomous import f_uPoC
 from .autonomous import sim_RK4, sim_LTI, sim_discrete
 
@@ -29,10 +29,10 @@ from .GPObs import GPObservable, GPObservablesManager
 # import utility functions
 from .utilities import plot_phase, plot_phase_w_bounds, plot_time_series_with_bounds, plot_predicted_sd_error
 from .utilities import plot_NRMSE_metrics, compare_model_predictions
-from .utilities import check_pd, MatViz3d, MatViz, plot_eigen
+from .utilities import check_pd, MatViz, plot_eigen
 from .utilities import get_kmeans
-from .utilities import sim_and_eval
-from .utilities import load_SimData, normalize_data, add_noise
+from .utilities import sim_and_eval, nlpd_per_traj, _nlpd_one
+from .utilities import load_SimData, normalize_data, add_noise, find_hp_init
 
 # import eDMD functions
 from .traditional import generate_basis, generate_basis_batch, eDMD_poly

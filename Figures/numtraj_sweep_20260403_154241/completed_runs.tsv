@@ -1,4 +1,0 @@
-num_train	status	text_summary	json_summary	log_file
-5	OK	Figures\numtraj_sweep_20260403_154241\numtrain_0005.txt	Figures\numtraj_sweep_20260403_154241\numtrain_0005.json	Figures\numtraj_sweep_20260403_154241\logs\numtrain_0005.log
-10	OK	Figures\numtraj_sweep_20260403_154241\numtrain_0010.txt	Figures\numtraj_sweep_20260403_154241\numtrain_0010.json	Figures\numtraj_sweep_20260403_154241\logs\numtrain_0010.log
-20	OK	Figures\numtraj_sweep_20260403_154241\numtrain_0020.txt	Figures\numtraj_sweep_20260403_154241\numtrain_0020.json	Figures\numtraj_sweep_20260403_154241\logs\numtrain_0020.log

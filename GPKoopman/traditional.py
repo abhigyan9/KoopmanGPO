@@ -589,13 +589,13 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
     for i in range(lifting_order):
         ObsManager.add_observable(
             index=i, d=C.shape[0], Ns=z0_lift.shape[1], 
-            kernel=GaussianKernel(), noise=1e-4, device='cpu'
+            kernel=GaussianKernel(), noise=1e-6, device='cpu',
         )
     ObsManager.set_random_hyperparameters(scale=[1., 1., None])
     for i in range(lifting_order):
         ObsManager.train_observable(i, ssid_Y[:, :, 0].mT, z0_lift[i, :].unsqueeze(dim=1))
 
-    ObsManager.optimize_hyperparameters(opt_noise=True)
+    ObsManager.optimize_hyperparameters(num_iter=200, lr=0.1, opt_noise=True)
 
     # Trajectory Simulation and Model Evaluation
     XhatTrain, XcvTrain, TrainNRMSE = sim_and_eval(

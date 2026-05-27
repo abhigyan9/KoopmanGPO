@@ -58,6 +58,7 @@ class GPObservable(nn.Module):
                 f"Received type: {type(kernel)}")
 
         self.kernel = kernel.to(device=self.device, dtype=self.dtype)
+        self.kernel.eps = self.eps
         self.kernel.beta = self.beta
         self.kernel.thresh = self.thresh
 
@@ -80,7 +81,7 @@ class GPObservable(nn.Module):
         noise_tensor = torch.as_tensor(
             noise, device=self.device, dtype=self.dtype,)
 
-        if torch.any(noise_tensor <= 0):
+        if torch.any(noise_tensor < 0):
             raise ValueError(f"noise must be strictly positive. Received {noise}.")
 
         self.raw_noise = nn.Parameter(
@@ -115,38 +116,6 @@ class GPObservable(nn.Module):
         Positive observation-noise standard deviation.
         """
         return F.softplus(self.raw_noise, beta=self.beta, threshold=self.thresh) + self.eps
-
-    def set_hyperparameters(self, hp1_list=None, hp2_list=None):
-        raise NotImplementedError
-        # if hp1_list is not None:
-        #     self.hp1_list = nn.ParameterList(
-        #         [param if isinstance(param, nn.Parameter)
-        #          else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-        #                            else torch.tensor(param, device=self.device))
-        #          for param in hp1_list]
-        #     )
-
-        # if hp2_list is not None:
-        #     self.hp2_list = nn.ParameterList(
-        #         [param if isinstance(param, nn.Parameter)
-        #          else nn.Parameter(param.clone().detach() if isinstance(param, torch.Tensor)
-        #                            else torch.tensor(param, device=self.device))
-        #          for param in hp2_list]
-        #     )
-
-    def get_parameters(self) -> dict:
-        """
-        Returns a dictionary containing the current hyperparameters (hp1_list, hp2_list), noise,
-        and attractor locations (mu_list) for this GPObservable.
-        """
-        raise NotImplementedError
-        # params = {
-        #     "hp1_list": [hp.detach() for hp in self.hp1_list],
-        #     "hp2_list": [hp.detach() for hp in self.hp2_list],
-        #     "noise": self.noise.detach(),
-        #     "mu_list": [mu.detach() for mu in self.mu_list]
-        # }
-        # return params
 
     def trainGP(self, Xtrain : torch.Tensor, ytrain : torch.Tensor):
         if (Xtrain.shape[0] != self.d) or (Xtrain.shape[1] != self.Ns):
@@ -394,7 +363,7 @@ class GPObservable(nn.Module):
                 log_det = 2.0 * torch.log(torch.diagonal(L)).sum()
             # Cost Fallback if Cholesky Decomposition fails
             else:
-                warnings.warn('Cholesky Decomposition failed for 5 attempts.'
+                warnings.warn('Cholesky failed for 5 attempts in hp_opt.'
                               'Using pinv with hermitian=True', RuntimeWarning)
                 # Final fallback if Cholesky repeatedly fails
                 # jitter = base_jitter * 1e4
@@ -412,7 +381,7 @@ class GPObservable(nn.Module):
                         RuntimeWarning)
 
             # Negative log marginal likelihood
-            loss = -0.5 * ( quad_term + log_det + (self.Ns * log_2pi) )
+            loss = 0.5 * ( quad_term + log_det + (self.Ns * log_2pi) )
 
             loss.backward()
             optimizer.step()
@@ -447,34 +416,6 @@ class GPObservablesManager:
             raise ValueError(f'Observable with index {index} already exists.')
         
         self.observables[index] = GPObservable(d, Ns, kernel, prior_mean, noise, dtype, device, eps, beta, thresh)
-
-    def get_params(self, index):
-        """
-        Returns a dictionary of the current parameters for the observable with the given index.
-        """
-        if index not in self.observables:
-            raise ValueError(f'Observable with index {index} does not exist.')
-        return self.observables[index].get_parameters()
-
-    def set_parameters(self, hp1_list=None, hp2_list=None, noise_list=None, mu_list=None):
-        raise NotImplementedError
-        # i = 0
-        # for obs in self.observables.values():
-        #     num_kernels = len(obs.kernel_types)
-
-        #     if hp1_list is not None:
-        #         for k in range(num_kernels):
-        #             obs.hp1_list[k].data = hp1_list[i + k].data.to(obs.device)
-        #     if hp2_list is not None:
-        #         for k in range(num_kernels):
-        #             obs.hp2_list[k].data = hp2_list[i + k].data.to(obs.device)
-        #     if noise_list is not None:
-        #         obs.noise.data = noise_list[i].data.to(obs.device)
-        #     if mu_list is not None:
-        #         for k in range(num_kernels):
-        #             obs.mu_list[k].data = mu_list[i + k].data.to(obs.device)
-
-        #     i += num_kernels
 
     def set_random_hyperparameters(
             self,
@@ -606,7 +547,7 @@ class GPObservablesManager:
                     # Randomize hp2
                     if scale_hp2 is not None:
                         
-                        hp2_rand = 2.0 * scale_hp2 * torch.rand_like(
+                        hp2_rand = 1e-2 + 2.0 * scale_hp2 * torch.rand_like(
                             kernel_module.raw_hp2).clamp(min=kernel_module.eps)
 
                         raw_hp2_rand = _raw_from_positive(hp2_rand, kernel_module.eps)
@@ -633,128 +574,102 @@ class GPObservablesManager:
             obs.optimize_hyperparameters(
                 num_iter, lr, opt_noise=opt_noise)
 
-    def visualize2D(self, resolution=50, range_x=(-1, 1), range_y=(-1, 1)):
+    def print_hyperparameters(self, indices=None):
         """
-        Generate surface plots for all 2D observables in the manager.
+        Print the realized hp1, hp2, and observable noise values used in
+        kernel evaluations and GP covariance computations.
 
-        Args:
-            resolution (int): Number of points along each axis for the grid.
-            range_x (tuple): Range of values for the first input dimension (min, max).
-            range_y (tuple): Range of values for the second input dimension (min, max).
+        Notes
+        -----
+        - Prints `kernel.hp1` and `kernel.hp2`, not `raw_hp1` or `raw_hp2`.
+        - Prints `obs.noise`, not `obs.raw_noise`.
+        - Composite kernels such as SumKernel and ProductKernel are traversed
+        recursively, and their child kernels are reported.
+        - The noise value is repeated across rows when an observable contains
+        multiple child kernels.
         """
-        for idx, observable in self.observables.items():
-            # Check if the observable input dimension is 2
-            if observable.Xtrain.shape[0] != 2:
-                raise ValueError(
-                    f"Observable {idx} does not have 2D inputs and cannot be plotted.")
 
-            # Create a meshgrid for plotting
-            x = np.linspace(*range_x, resolution)
-            y = np.linspace(*range_y, resolution)
-            X, Y = np.meshgrid(x, y)
-            grid_points = torch.tensor(
-                np.vstack([X.ravel(), Y.ravel()]), dtype=torch.float32).to(observable.device)
-
-            # Predict the mean values for the grid points
-            Z = observable.predictMean(grid_points)
-            Z = Z.cpu()
-            Z = Z.detach().numpy().reshape(resolution, resolution)
-
-            # Plot the surface
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            ax.plot_surface(X, Y, Z, cmap='viridis', edgecolor='k', alpha=0.8)
-            ax.set_title(f"Observable {idx+1} Surface Plot")
-            ax.set_xlabel("X1")
-            ax.set_ylabel("X2")
-            ax.set_zlabel("Mean")
-            plt.show()
-
-    def print_parameters(self, indices=None, get_KTypes=True, get_noise=True, get_hp1=True, get_hp2=True, get_mu=True):
-        """
-        Prints a table with hyperparameter details for each GPObservable in scientific notation 
-        with 3 significant digits.
-
-        Each row corresponds to an observable (or only those specified via indices)
-        and includes the following columns (if requested):
-        - Observable index
-        - Kernel types (comma-separated)
-        - Noise value
-        - hp1 value(s)
-        - hp2 value(s)
-        - mu value(s)
-        """
-        # Determine which observables to print.
+        # --------------------------------------------------
+        # Select observables
+        # --------------------------------------------------
         if indices is None:
             indices = sorted(self.observables.keys())
         else:
-            indices = [idx for idx in indices if idx in self.observables]
+            missing = [idx for idx in indices if idx not in self.observables]
+            if missing:
+                raise ValueError(
+                    f"Observable index/indices not found: {missing}"
+                )
 
-        # Build the header based on requested columns.
-        headers = ["Index"]
-        if get_KTypes:
-            headers.append("Kernel Types")
-        if get_noise:
-            headers.append("Noise")
-        if get_hp1:
-            headers.append("hp1")
-        if get_hp2:
-            headers.append("hp2")
-        if get_mu:
-            headers.append("mu")
+        # --------------------------------------------------
+        # Formatting helper
+        # --------------------------------------------------
+        def _fmt(value: torch.Tensor) -> str:
+            value = value.detach().cpu().reshape(-1)
 
-        # Gather table rows.
+            if value.numel() == 1:
+                return f"{value.item():.3e}"
+
+            return "[" + ", ".join(f"{v.item():.3e}" for v in value) + "]"
+
+        # --------------------------------------------------
+        # Build rows
+        # --------------------------------------------------
         rows = []
-        for idx in indices:
-            obs = self.observables[idx]
-            row = [str(idx)]
-            if get_KTypes:
-                row.append(", ".join(obs.kernel_types))
-            if get_noise:
-                row.append(f"{obs.noise.detach().cpu().item():.3e}")
-            if get_hp1:
-                hp1_str = ", ".join(
-                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
-                    "[" +
-                    ", ".join(f"{x:.3e}" for x in p.detach(
-                    ).cpu().view(-1).tolist()) + "]"
-                    for p in obs.hp1_list
-                )
-                row.append(hp1_str)
-            if get_hp2:
-                hp2_str = ", ".join(
-                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
-                    "[" +
-                    ", ".join(f"{x:.3e}" for x in p.detach(
-                    ).cpu().view(-1).tolist()) + "]"
-                    for p in obs.hp2_list
-                )
-                row.append(hp2_str)
-            if get_mu:
-                mu_str = ", ".join(
-                    f"{p.detach().cpu().item():.3e}" if p.numel() == 1 else
-                    "[" +
-                    ", ".join(f"{x:.3e}" for x in p.detach(
-                    ).cpu().view(-1).tolist()) + "]"
-                    for p in obs.mu_list
-                )
-                row.append(mu_str)
-            rows.append(row)
 
-        # Determine the maximum width for each column (for neat printing).
-        col_widths = [max(len(str(item)) for item in col)
-                      for col in zip(headers, *rows)]
+        for obs_idx in indices:
+            obs = self.observables[obs_idx]
+            noise_str = _fmt(obs.noise)
+            kernel_counter = 0
 
-        # Print header.
-        header_line = " | ".join(header.ljust(width)
-                                 for header, width in zip(headers, col_widths))
+            # Recursively walks through composite kernels as well
+            for kernel_module in obs.kernel.modules():
+
+                # Only kernels with hp1 and hp2 should be printed
+                if not isinstance(
+                    kernel_module,
+                    (TwoPositiveParameterKernel, TwoParameterKernel)
+                ):
+                    continue
+
+                rows.append([
+                    str(obs_idx),
+                    noise_str,
+                    str(kernel_counter),
+                    kernel_module.__class__.__name__,
+                    _fmt(kernel_module.hp1),
+                    _fmt(kernel_module.hp2),
+                ])
+
+                kernel_counter += 1
+
+        # --------------------------------------------------
+        # Print table
+        # --------------------------------------------------
+        headers = ["Observable", "Noise", "Kernel #", "Kernel Type", "hp1", "hp2"]
+
+        if len(rows) == 0:
+            print("No kernels with hp1/hp2 parameters were found.")
+            return
+
+        col_widths = [
+            max(len(row[col]) for row in [headers] + rows)
+            for col in range(len(headers))
+        ]
+
+        header_line = " | ".join(
+            header.ljust(width)
+            for header, width in zip(headers, col_widths)
+        )
+
         print(header_line)
         print("-" * len(header_line))
 
-        # Print each row.
         for row in rows:
-            print(" | ".join(cell.ljust(width)
-                  for cell, width in zip(row, col_widths)))
+            print(" | ".join(
+                cell.ljust(width)
+                for cell, width in zip(row, col_widths)
+            ))
 
 
 def getKoopman(manager: GPObservablesManager,
@@ -789,7 +704,8 @@ def getKoopman(manager: GPObservablesManager,
     N = X.shape[1]//nT
     nz = manager.num_obs
     device = manager.observables[0].device
-    X, Xplus = X.to(device=device), Xplus.to(device=device)
+    dtype = manager.observables[0].dtype
+    X, Xplus = X.to(device=device, dtype=dtype), Xplus.to(device=device, dtype=dtype)
 
     M = torch.zeros((nz, N*nT), device=device)
     Mplus = torch.zeros((nz, N*nT), device=device)

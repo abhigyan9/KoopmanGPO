@@ -1,3 +1,10 @@
+import os
+
+# Optional: set these before importing numpy / sklearn for stricter reproducibility
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -219,7 +226,7 @@ def plot_NRMSE_metrics(TrainNRMSE_list, TestNRMSE_list, model_names):
         bp = ax.boxplot(
             data,
             labels=model_names,
-            showfliers=True,
+            showfliers=False,
             patch_artist=False,
             widths=0.6,
             showmeans=True,
@@ -501,48 +508,6 @@ def check_pd(matrix: torch.Tensor):
             return "Neither"
 
 
-def MatViz3d(matrix: torch.Tensor):
-    """
-    Plots a 3D surface representation of a 2D PyTorch tensor.
-
-    Args:
-        matrix (torch.Tensor): A 2D tensor representing the surface.
-
-    Raises:
-        ValueError: If the input is not a 2D tensor.
-    """
-    if not (matrix.dim() == 2):
-        raise ValueError("Input must be a 2D tensor")
-
-    # Convert to NumPy
-    matrix_np = matrix.cpu().detach().numpy()
-
-    # Create meshgrid for X, Y indices
-    x = np.arange(matrix_np.shape[1])
-    y = np.arange(matrix_np.shape[0])
-    X, Y = np.meshgrid(x, y)
-
-    # Create figure and 3D axis
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Plot surface
-    surf = ax.plot_surface(X, Y, matrix_np, cmap='viridis', edgecolor='k')
-
-    # Add colorbar
-    cbar = fig.colorbar(surf, ax=ax, shrink=0.6)
-    cbar.set_label('Element Value')
-
-    # Labels
-    ax.set_xlabel('Column Index')
-    ax.set_ylabel('Row Index')
-    ax.set_zlabel('Value')
-    ax.set_title(
-        f'3D Surface Plot | Max={np.max(matrix_np)}, Min={np.min(matrix_np)}')
-
-    # plt.show()
-
-
 def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
     """
     Visualize a 2D PyTorch tensor as either a 3D surface or a 2D heatmap.
@@ -636,37 +601,97 @@ def plot_eigen(A):  # Eigen value plot of Koopman Matrices
 
 # K-Means Clusting helper function
 
-def get_kmeans(data, num_centers=1):
+# def get_kmeans(data, num_centers=1):
+#     """
+#     Compute K-Means clustering for the given data and return cluster centroids.
+
+#     Args:
+#         data (torch.Tensor or np.ndarray): Data of shape (dimension, samples).
+#         num_centers (int): Number of cluster centers (clusters) to compute.
+
+#     Returns:
+#         torch.Tensor: Cluster centroids of shape (dimension, num_centers).
+#     """
+#     # Convert data to NumPy array if necessary
+#     if isinstance(data, torch.Tensor):
+#         data_np = data.detach().cpu().numpy()
+#     else:
+#         data_np = np.array(data)
+
+#     # Transpose data to shape (samples, dimension) for scikit-learn
+#     data_np = data_np.T
+
+#     # Perform k-means clustering
+#     kmeans = KMeans(n_clusters=num_centers, random_state=0).fit(data_np)
+
+#     # Get centroids; shape will be (num_centers, dimension)
+#     centroids_np = kmeans.cluster_centers_
+
+#     # Convert centroids to a torch tensor and transpose to shape (dimension, num_centers)
+#     centroids = torch.from_numpy(centroids_np.T).float()
+
+#     return centroids
+
+
+def get_kmeans(data, num_centers=1, seed=0, dtype=torch.float32):
     """
-    Compute K-Means clustering for the given data and return cluster centroids.
+    Deterministic K-Means centroids.
 
     Args:
-        data (torch.Tensor or np.ndarray): Data of shape (dimension, samples).
-        num_centers (int): Number of cluster centers (clusters) to compute.
+        data:
+            Tensor/array of shape (dimension, samples).
+        num_centers:
+            Number of K-Means centers.
+        seed:
+            Random seed for K-Means initialization.
+        dtype:
+            Torch dtype of returned centroids.
 
     Returns:
-        torch.Tensor: Cluster centroids of shape (dimension, num_centers).
+        centroids:
+            Tensor of shape (dimension, num_centers).
     """
-    # Convert data to NumPy array if necessary
+
     if isinstance(data, torch.Tensor):
+        device = data.device
         data_np = data.detach().cpu().numpy()
     else:
-        data_np = np.array(data)
+        device = torch.device("cpu")
+        data_np = np.asarray(data)
 
-    # Transpose data to shape (samples, dimension) for scikit-learn
-    data_np = data_np.T
+    # Shape: (samples, dimension)
+    data_np = np.ascontiguousarray(data_np.T, dtype=np.float64)
 
-    # Perform k-means clustering
-    kmeans = KMeans(n_clusters=num_centers, random_state=0).fit(data_np)
+    kmeans = KMeans(
+        n_clusters=num_centers,
+        init="k-means++",
+        n_init=8,          # do not leave this as sklearn's version-dependent default
+        random_state=seed,
+        algorithm="lloyd",  # deterministic batch Lloyd iterations
+        max_iter=300,
+        tol=1e-4,
+        copy_x=True,
+    )
 
-    # Get centroids; shape will be (num_centers, dimension)
+    kmeans.fit(data_np)
+
+    # Shape: (num_centers, dimension)
     centroids_np = kmeans.cluster_centers_
 
-    # Convert centroids to a torch tensor and transpose to shape (dimension, num_centers)
-    centroids = torch.from_numpy(centroids_np.T).float()
+    # Canonical ordering of centers.
+    # K-Means cluster labels are not intrinsically ordered.
+    # This makes the returned column order deterministic.
+    order = np.lexsort(centroids_np.T[::-1])
+    centroids_np = centroids_np[order]
+
+    # Return shape: (dimension, num_centers)
+    centroids = torch.as_tensor(
+        centroids_np.T,
+        dtype=dtype,
+        device=device,
+    )
 
     return centroids
-
 
 # Simulation Tools
 
@@ -726,6 +751,48 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
         NRMSE[j] = rmse / y_range
 
     return Xhat.detach(), Xcv.detach(), NRMSE.detach()
+
+
+# Evaluation Tools
+
+def _nlpd_one(y, mu, S, jitter=1e-8):
+    """
+    NLPD for a single multivariate Gaussian y~N(mu,S).
+    y, mu: (n,)
+    S: (n,n) covariance
+    Returns scalar (float)
+    """
+    n = y.numel()
+    S = 0.5 * (S + S.T)  # symmetrize
+    S = S + jitter * torch.eye(n, dtype=S.dtype)
+    try:
+        L = torch.linalg.cholesky(S)
+        logdet = 2.0 * torch.log(torch.diag(L)).sum()
+        diff = (y - mu).view(n, 1)
+        sol = torch.cholesky_solve(diff, L)
+        quad = float((diff.T @ sol).item())
+        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
+    except Exception:
+        # Diagonal fallback
+        diag = torch.clamp(torch.diagonal(S), min=jitter)
+        logdet = torch.log(diag).sum()
+        quad = ((y - mu) ** 2 / diag).sum().item()
+        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
+
+def nlpd_per_traj(Xhat:torch.Tensor, Xcv:torch.Tensor, GT:torch.Tensor):
+    """
+    Time-averaged NLPD per trajectory
+    returns (nTraj,) tensor
+    """
+    nTraj, n, N = Xhat.shape
+    traj_vals = torch.zeros(nTraj, dtype=Xhat.dtype)
+    for j in range(nTraj):
+        acc = 0.0
+        for k in range(N):
+            acc += _nlpd_one(GT[j, :, k], Xhat[j, :, k],
+                            torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6))
+        traj_vals[j] = acc / N
+    return traj_vals
 
 
 # Data Pre-Processing Tools
@@ -802,3 +869,24 @@ def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=1111):
             f"Unsupported noise_type {noise_type}. Choose 'gaussian', 'uniform', 'linear_gaussian', 'quadratic_gaussian', or 'linear_uniform'.")
 
     return SimData_norm + noise
+
+
+def find_hp_init(SimData, nTrain, max_pairs=5_000_000):
+    X = SimData[:nTrain, :, :-1].permute(0, 2, 1).reshape(-1, SimData.shape[1])
+    X = X.detach().cpu().numpy()
+
+    npts = X.shape[0]
+    npairs = npts * (npts - 1) // 2
+
+    if npairs <= max_pairs:
+        d = []
+        for i in range(npts - 1):
+            d.append(np.linalg.norm(X[i + 1:] - X[i], axis=1))
+        return float(np.median(np.concatenate(d)))
+
+    rng = np.random.default_rng(0)
+    i = rng.integers(0, npts, size=max_pairs)
+    j = rng.integers(0, npts, size=max_pairs)
+    mask = i != j
+
+    return float(np.median(np.linalg.norm(X[i[mask]] - X[j[mask]], axis=1)))

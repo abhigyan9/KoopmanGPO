@@ -7,63 +7,8 @@ import argparse
 import GPKoopman as gpk
 from datetime import datetime
 import os
-
-# --------- #
-## HELPERS ##
-# --------- #
-
-
-def find_hp_init(SimData: torch.tensor, nTrain: int) -> float:
-    def _stack_snapshot_pairs(batch: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
-        """
-        batch: (nB, n, T+1)
-        Returns:
-            X: (nB*T, n), Y: (nB*T, n)
-        """
-        n = batch.shape[1]
-        X = batch[:, :, :-1].permute(0, 2, 1).reshape(-1,
-                                                      n).detach().cpu().numpy()
-        Y = batch[:, :,  1:].permute(
-            0, 2, 1).reshape(-1, n).detach().cpu().numpy()
-        return X, Y
-    # ---------- build stacked (X,Y) ----------
-    train_batch = SimData[:nTrain]
-    Xtr, _ = _stack_snapshot_pairs(train_batch)
-    Npts = Xtr.shape[0]
-
-    max_pairs_to_store = 5_000_000  # ~5 million floats ~ 40MB
-    num_pairs = Npts * (Npts - 1) // 2
-
-    if num_pairs <= max_pairs_to_store:
-        # Store all distances (exact median).
-        dists = np.empty(num_pairs, dtype=np.float32)
-        k = 0
-        for i in range(Npts - 1):
-            diff = Xtr[i + 1:] - Xtr[i]                 # (Npts-i-1, n)
-            di = np.sqrt(np.sum(diff * diff, axis=1))    # (Npts-i-1,)
-            dists[k: k + di.size] = di
-            k += di.size
-        hp_init = float(np.median(dists))
-        return hp_init
-    else:  # fallback for huge datasets
-        rng = np.random.default_rng(0)
-        # sample up to the cap
-        sample_pairs = min(max_pairs_to_store, num_pairs)
-        idx_i = rng.integers(0, Npts, size=sample_pairs, endpoint=False)
-        idx_j = rng.integers(0, Npts, size=sample_pairs, endpoint=False)
-
-        # Ensure i != j (resample conflicts)
-        mask = idx_i == idx_j
-        while np.any(mask):
-            idx_j[mask] = rng.integers(
-                0, Npts, size=int(mask.sum()), endpoint=False)
-            mask = idx_i == idx_j
-
-        diffs = Xtr[idx_i] - Xtr[idx_j]
-        dists = np.sqrt(np.sum(diffs * diffs, axis=1))
-        hp_init = float(np.median(dists))
-        return hp_init
-
+import warnings
+warnings.filterwarnings("ignore")
 
 # -------------------------------------------------
 # Parse command-line arguments
@@ -101,6 +46,8 @@ parser.add_argument("--train_frac", type=float,
                     default=0.60,
                     help="Fraction of Trajectories to use for Training [must be less than 1]")
 
+parser.add_argument("--directory", type=str, default='Figures/Journal/',
+                    help="Enter relative path to Directory ending with /")
 args = parser.parse_args()
 
 # -------------------------------------------------
@@ -114,14 +61,15 @@ POLY_DEG = int(args.poly_deg)
 MAX_ITER = int(args.max_iter)
 LEARN_RATE = float(args.learn_rate)
 TRAIN_FRAC = float(args.train_frac)
+DIRECTORY = args.directory
 
 TEST_FRAC = 1 - TRAIN_FRAC
 CLIP = None
 NORMALIZE_DATA = True
 
-SEEDS = [1234]
+SEEDS = [100]
 stamp = datetime.now().strftime("%Y%m%d")
-OUTDIR = "Figures/Journal/" + SYSTEM_NAME + f'_{LIFTED_ORDER}D-' + stamp
+OUTDIR = DIRECTORY + SYSTEM_NAME + f'_{LIFTED_ORDER}D-' + stamp
 os.makedirs(OUTDIR, exist_ok=True)
 # Find Scale of Hyperparameter Initialization
 SimData_raw, _, _, N, nTrain, _ = gpk.load_SimData(
@@ -133,7 +81,8 @@ if NORMALIZE_DATA:
 else:
     SimData_clean = SimData_raw
 
-hp_scale = find_hp_init(SimData, nTrain)
+hp_scale = gpk.find_hp_init(SimData, nTrain)
+print(f'Found heuristic Lengthscale: {hp_scale}')
 
 # -------------------------------------------------
 # Run experiments

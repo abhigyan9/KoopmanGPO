@@ -21,51 +21,8 @@ from pathlib import Path
 import torch
 
 import GPKoopman as gpk
-from get_iGPK_new import find_hp_init, get_iGPK
+from get_iGPK_fcn import get_iGPK
 from TrajDataGen_refactored import generate_dataset
-
-
-def _nlpd_one(y: torch.Tensor, mu: torch.Tensor, S: torch.Tensor, jitter: float = 1e-8) -> float:
-    """
-    NLPD for a single multivariate Gaussian y~N(mu,S).
-    y, mu: (n,)
-    S: (n,n) covariance
-    Returns scalar (float)
-    """
-    n = y.numel()
-    S = 0.5 * (S + S.T)
-    S = S + jitter * torch.eye(n, dtype=S.dtype, device=S.device)
-    try:
-        L = torch.linalg.cholesky(S)
-        logdet = 2.0 * torch.log(torch.diag(L)).sum()
-        diff = (y - mu).view(n, 1)
-        sol = torch.cholesky_solve(diff, L)
-        quad = float((diff.T @ sol).item())
-        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
-    except Exception:
-        diag = torch.clamp(torch.diagonal(S), min=jitter)
-        logdet = torch.log(diag).sum()
-        quad = ((y - mu) ** 2 / diag).sum().item()
-        return 0.5 * (n * math.log(2.0 * math.pi) + float(logdet) + quad)
-
-
-def _nlpd_per_traj(Xhat: torch.Tensor, Xcv: torch.Tensor, GT: torch.Tensor) -> torch.Tensor:
-    """
-    Average NLPD per trajectory across time-steps.
-    returns (nTraj,) tensor
-    """
-    nTraj, _, N = Xhat.shape
-    traj_vals = torch.empty(nTraj, dtype=Xhat.dtype)
-    for j in range(nTraj):
-        acc = 0.0
-        for k in range(N):
-            acc += _nlpd_one(
-                GT[j, :, k],
-                Xhat[j, :, k],
-                torch.clamp(torch.abs(Xcv[j, :, :, k]), min=1e-6),
-            )
-        traj_vals[j] = acc / N
-    return traj_vals
 
 
 def _trajwise_mean(metric: torch.Tensor) -> torch.Tensor:
@@ -148,9 +105,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lifting-order", type=int, default=10)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--learn-rate", type=float, default=1e-3)
+    parser.add_argument("--learn-rate", type=float, default=1e-2)
+    parser.add_argument("--momentum", type=float, default=0.75)
+    parser.add_argument("--tol", type=float, default=1e-3)
+    
     parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--train-method", type=str, default="Horizon")
+    parser.add_argument("--train-method", type=str, default="Zero-Mean")
     parser.add_argument("--routine", type=str, default="Z_only")
     parser.add_argument("--hp1-scale", type=float, default=4.0)
     parser.add_argument(
@@ -178,6 +138,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    import warnings
+    warnings.filterwarnings("ignore")
     args = parse_args()
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -217,29 +179,40 @@ def main() -> int:
             )
 
         print(f"[run] normalizing data using training split statistics", flush=True)
-        SimData, _, _ = gpk.normalize_data(SimData_raw, num_train, N)
+        SimData, _, _ = gpk.normalize_data(
+            SimData_raw.to(dtype=torch.float32), num_train, N)
 
         print(f"[run] estimating kernel lengthscale heuristic", flush=True)
-        hp_init = find_hp_init(SimData, num_train)
+        hp_init = gpk.find_hp_init(SimData, num_train)
+        
+        Dataset = {}
+        nx = SimData.shape[1]
+        N = SimData.shape[2] - 1
+        Dataset['SimData'] = SimData
+        Dataset['X'] = torch.cat([SimData[j, :, 0:N] for j in range(num_train)],
+                                dim=1)  # (nx, N*nTrain)
+        Dataset['Xplus'] = torch.cat([SimData[j, :, 1:] for j in range(num_train)],
+                                dim=1)  # (nx, N*nTrain)
+        Dataset['ICsetTrain'] = torch.cat([SimData[j, :, 0].view(nx, 1) 
+            for j in range(num_train)], dim=1)
+        Dataset['ICsetTest'] = torch.cat([SimData[j, :, 0].view(nx, 1)
+            for j in range(num_train, num_train + num_test)], dim=1)
+        Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=num_train)
+        Dataset['dims'] = (nx, N)
 
         print(f"[run] starting iGPK", flush=True)
-        t0 = time.perf_counter()
+        # t0 = time.perf_counter()
         results = get_iGPK(
-            SimData=SimData,
-            nTrain=num_train,
-            nTest=num_test,
-            lifting_order=args.lifting_order,
-            max_iter=args.max_iter,
-            learn_rate=args.learn_rate,
+            Data=Dataset, nTrain=num_train, nTest=num_test,
+            lifting_order=args.lifting_order, max_iter=args.max_iter,
+            sgd_lr=args.learn_rate, sgd_m=args.momentum, stop_tol=args.tol,
             opt_weights=list(args.opt_weights),
-            routine=args.routine,
-            train_method=args.train_method,
-            hp_scale=[args.hp1_scale, hp_init, None],
-            device=device,
-            seed_z=args.seed_z,
-            seed_hp=args.seed_hp,
+            routine=args.routine, train_method=args.train_method,
+            hp_scale=[None, hp_init, None],
+            device=device, seed_z=args.seed_z, seed_hp=args.seed_hp,
+            traj_batch_size=15, full_cost_eval_every=50,
         )
-        elapsed = time.perf_counter() - t0
+        elapsed = results['history']['opt_time']
 
         TrainNRMSE = results["Train"]["NRMSE"].detach().cpu()
         TestNRMSE = results["Test"]["NRMSE"].detach().cpu()
@@ -248,7 +221,7 @@ def main() -> int:
         XhatTest = results["Test"]["Xhat"].detach().cpu()
         XcvTest = results["Test"]["Xcv"].detach().cpu()
         final_train_cost = float(torch.as_tensor(
-            results["final_train_cost"]).item())
+            results["history"]['cost'][-1]).item())
 
         valid_slice = slice(2, N - 2)
         GT_train = SimData[:num_train, :, valid_slice].detach().cpu()
@@ -256,12 +229,12 @@ def main() -> int:
                           num_test, :, valid_slice].detach().cpu()
 
         print("[run] computing NLPD summaries", flush=True)
-        train_nlpd = _nlpd_per_traj(
+        train_nlpd = gpk.nlpd_per_traj(
             XhatTrain[:, :, valid_slice],
             XcvTrain[:, :, :, valid_slice],
             GT_train,
         )
-        test_nlpd = _nlpd_per_traj(
+        test_nlpd = gpk.nlpd_per_traj(
             XhatTest[:, :, valid_slice],
             XcvTest[:, :, :, valid_slice],
             GT_test,

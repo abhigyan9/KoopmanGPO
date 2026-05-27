@@ -6,6 +6,7 @@ import torch
 import matplotlib.pyplot as plt
 import GPKoopman as gpk
 from get_iGPK_new import get_iGPK
+from matplotlib.ticker import MaxNLocator, FormatStrFormatter
 
 # ----------------------------
 # Utilities
@@ -209,20 +210,20 @@ def plot_final_cost_heatmap(
 if __name__ == "__main__":
 
     # 1) EXPERIMENT CONFIGURATION
-    system_name = 'Inhibited Predator-Prey'
-    train_frac, test_frac = 0.4, 0.6
+    system_name = 'Cart_data'
+    train_frac, test_frac = 0.6, 0.4
     clip = None
-    lifted_order = 10
+    lifted_order = 35
     noise_type, noise_intensity = 'gaussian', 0.
-    iters_list = [0, 0, 0, 500]
-    learn_rate = 0.001
-    opt_weights = [1., 1., 1.]
-    routine = "Z-only"
-    train_method = "Horizon"
+    MAX_ITER = int(1e5)
+    SGD_LR, SGD_MOM = 0.01, 0.7
+    OPT_WEIGHTS = [10., 10., 0.]
+    ROUTINE = "Z-only"
+    TRAIN_METHOD = "Zero-Mean"
     device = "cuda:0"
 
-    OUTDIR = f"Figures/iGPK_Seed_Sensitivity/{routine}"
-    hp_seeds, z_seeds = [1, 3, 7, 8, 40, 59, 61], [11, 13, 14, 21, 33, 43, 53]
+    OUTDIR = f"Figures/iGPK-Seed_Sensitivity/{system_name}/LR-{SGD_LR:.2e}_MOM-{SGD_MOM:.2f}"
+    hp_seeds, z_seeds = [1234], [1, 5, 10, 19, 50, 77, 100, 111, 123, 241, 511, 777, 1234, 1419, 2000]
     os.makedirs(OUTDIR, exist_ok=True)
 
     # 1.1) Load and Normalize Data
@@ -250,227 +251,177 @@ if __name__ == "__main__":
             print(
                 f'Tag: {tag} || Run: {run_id} | Z Seed: {z_seed} | HP Seed: {hp_seed}\n')
 
-            results = get_iGPK(
-                SimData, nTrain, nTest, lifted_order,
-                iters_list, learn_rate,
-                opt_weights, routine,
-                train_method, hp_scale=[None, HP_INIT, None],
-                device=device, seed_z=z_seed, seed_hp=hp_seed
-            )
+            results = get_iGPK(SimData, nTrain, nTest, lifted_order,
+                        MAX_ITER, sgd_lr=SGD_LR, sgd_m=SGD_MOM,
+                        opt_weights=OPT_WEIGHTS, routine=ROUTINE,
+                        train_method=TRAIN_METHOD, hp_scale=[None, HP_INIT, None],
+                        seed_z=z_seed, seed_hp=hp_seed)
 
             # Pull metrics
-            cost_hist, final_cost = _extract_costs(results)
+            final_cost_mle = results['history']['post_mle_cost']
 
-            A = results["A"]
-            A = A.detach().cpu().numpy()
-            eigvals = np.linalg.eigvals(A)
+            cost_history = results['history']['cost']           # tensor
+            post_mle_cost = results['history']['post_mle_cost'] # tensor
+
+            train_nlpd = gpk.nlpd_per_traj(results['Train']['Xhat'],
+                                          results['Train']['Xcv'],
+                                          SimData[:nTrain, :, :N])
+            test_nlpd = gpk.nlpd_per_traj(results['Test']['Xhat'],
+                                          results['Test']['Xcv'],
+                                          SimData[nTrain:, :, :N])
 
             runs.append({
                 "run_id": run_id,
                 "tag": tag,
                 "z_seed": z_seed,
                 "hp_seed": hp_seed,
-                "cost_history": cost_hist,
-                "final_train_cost": final_cost,
-                "TrainNRMSE": results['Train'].get('NRMSE', None),
-                "TestNRMSE": results['Test'].get('NRMSE', None),
-                "TrainErrMean": torch.mean(results['Train'].get('NRMSE', None)),
-                "TestErrMean": torch.mean(results['Test'].get('NRMSE', None)),
-            })
+                "cost_history": cost_history,
+                # "final_train_cost": cost_history[-1],
+                "post_mle_cost": results['history']['post_mle_cost'],
+                "Train": {
+                    "NRMSE": results['Train'].get('NRMSE', None).mean(),
+                    "NLPD":  train_nlpd.mean(),
+                    },
+                "Test": {
+                    "NRMSE": results['Test'].get('NRMSE', None).mean(),
+                    "NLPD":  test_nlpd.mean(),
+                    },
+                })
+            
+            print(f'Finished Run ID {run_id}')
 
     # Save everything
-    torch.save(runs, os.path.join(OUTDIR, "iGPK_init_sweep_runs.pt"))
+    torch.save(runs, os.path.join(OUTDIR, "iGPK-SEED_sweep-runs.pt"))
 
     # ---------------------------
     # 3) PLOT AND SAVE RESULTS  #
     # ---------------------------
+    # Gather major Results
+    cost_pre, cost_post = [], []
+    train_nrmse, test_nrmse = [], []
+    train_nlpd, test_nlpd = [], []
+    for run in runs:
+        cost_pre.append(float(run['cost_history'][-1]))
+        cost_post.append(float(run['post_mle_cost']))
+        train_nrmse.append(float(100*run['Train']['NRMSE']))
+        train_nlpd.append(float(run['Train']['NLPD']))
+        test_nrmse.append(float(100*run['Test']['NRMSE']))
+        test_nlpd.append(float(run['Test']['NLPD']))
 
-    # Plot 1: cost histories
-    plt.figure(figsize=(10, 6))
-    for r in runs:
-        ch = r["cost_history"]
-        if ch is None or len(ch) == 0:
-            continue
-        ch_plot = np.clip(ch, 1e-16, None)
-        plt.plot(np.arange(len(ch_plot)), ch_plot,
-                 linewidth=1.25, alpha=0.85, label=r["tag"])
+    if True:    # PLOT 1 : COST HISTORY
+        plt.figure(figsize=(10, 6))
+        for r in runs:
+            ch = r["cost_history"]
+            if ch is None or len(ch) == 0:
+                continue
+            ch_plot = np.clip(ch, 1e-16, None)
+            plt.plot(np.arange(len(ch_plot)), ch_plot,
+                    linewidth=1.0, alpha=0.85, label=r["tag"])
 
-    plt.yscale("log")
-    plt.xlabel("GD Iteration")
-    plt.ylabel("Training Cost (log scale)")
-    plt.title("iGPK Cost Histories Across Initializations")
-    if len(runs) <= 12:
-        plt.legend(fontsize=8, ncol=1)
-    else:
-        plt.text(0.01, 0.01, f"{len(runs)} runs (legend suppressed)",
-                 transform=plt.gca().transAxes, fontsize=9, va="bottom")
-    plt.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.4)
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTDIR, "cost_histories_log.png"), dpi=200)
-    plt.close()
+        plt.yscale("log")
+        plt.xlabel("GD Iteration")
+        plt.ylabel("Training Cost (log scale)")
+        plt.title("iGPK Cost Histories Across Initializations")
+        if len(runs) <= 16:
+            plt.legend(fontsize=8, ncol=2)
+        else:
+            plt.text(0.01, 0.01, f"{len(runs)} runs (legend suppressed)",
+                    transform=plt.gca().transAxes, fontsize=9, va="bottom")
+        plt.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.4)
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTDIR, "cost_histories_log.png"), dpi=200)
+        plt.grid()
+        plt.close()
 
     # Plot 2: final_train_cost distribution
-    finals = np.array([r["final_train_cost"]
-                      for r in runs if r["final_train_cost"] is not None], dtype=np.float64)
-    plt.figure(figsize=(9, 5))
-    if len(finals) > 0:
-        plt.hist(finals, bins=min(30, max(5, int(math.sqrt(len(finals))))),
-                 edgecolor="k", linewidth=0.5)
-        plt.xlabel("final_train_cost")
-        plt.ylabel("Count")
-        plt.title("Distribution of final_train_cost Across Initializations")
-        plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
-    else:
-        plt.text(0.5, 0.5, "No final_train_cost values found.",
-                 ha="center", va="center")
-        plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(os.path.join(
-        OUTDIR, "iGPK_final_train_cost_hist.png"), dpi=200)
-    plt.close()
-
-    # Plot 3 (6 plots): Surface Plots and Heatmaps of Final Train Cost and Mean Train and Test NRMSE
-    if True:
-        # PLOT 3 A
-        plot_final_cost_surface(
-            runs,
-            labels=["HP Seed", "Z Seed", "Final Train Cost",
-                    "iGPK Final Cost Surface"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_finalcost_surface"
-        )
-        plot_final_cost_heatmap(
-            runs,
-            labels=["HP Seed", "Z Seed", "Final Train Cost",
-                    "iGPK Final Cost Heatmap"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_finalcost_heatmap"
-        )
-        # PLOT 3 B
-        plot_final_cost_surface(
-            runs,
-            cost_key='TrainErrMean',
-            labels=["HP Seed", "Z Seed", "Mean Train NRMSE",
-                    "iGPK Mean Train NRMSE Surface"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_meanNRMSE_Train_surface"
-        )
-        plot_final_cost_heatmap(
-            runs,
-            cost_key='TrainErrMean',
-            labels=["HP Seed", "Z Seed", "Mean Train NRMSE",
-                    "iGPK Mean Train NRMSE HeatMap"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_meanNRMSE_Train_heatmap"
-        )
-        # PLOT 3 C
-        plot_final_cost_surface(
-            runs,
-            cost_key='TestErrMean',
-            labels=["HP Seed", "Z Seed", "Mean Test NRMSE",
-                    "iGPK Mean Test NRMSE Surface"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_meanNRMSE_Test_surface"
-        )
-        plot_final_cost_heatmap(
-            runs,
-            cost_key='TestErrMean',
-            labels=["HP Seed", "Z Seed", "Mean Test NRMSE",
-                    "iGPK Mean Test NRMSE HeatMap"],
-            outdir=OUTDIR,
-            fname_stub=f"{system_name}_meanNRMSE_Test_heatmap"
-        )
-
-    # --- NEW Plot 3: Eigenvalues of A in complex plane across seeds ---
-    plt.figure(figsize=(7, 7))
-    have_any = False
-    for r in runs:
-        ev = r.get("eigvals_A", None)
-        if ev is None:
-            continue
-        have_any = True
-        plt.scatter(ev.real, ev.imag, s=22, alpha=0.75,
-                    label=f"run {r['run_id']}")
-
-    # unit circle reference
-    th = np.linspace(0, 2*np.pi, 400)
-    plt.plot(np.cos(th), np.sin(th), linewidth=1.0, alpha=0.7)
-
-    plt.axhline(0.0, linewidth=0.8, alpha=0.5)
-    plt.axvline(0.0, linewidth=0.8, alpha=0.5)
-    plt.gca().set_aspect("equal", adjustable="box")
-    plt.xlabel("Re(λ)")
-    plt.ylabel("Im(λ)")
-    plt.title("Eigenvalues of A across iGPK seeds (complex plane)")
-    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
-    if len(runs) <= 10:
-        plt.legend(fontsize=8, ncol=1)
-    plt.tight_layout()
-    if have_any:
+    if True:    # PLOT 2 : PRE AND POST MLE COST
+        plt.figure(figsize=(5, 5))
+        plt.scatter(cost_pre, cost_post, alpha=0.75)
+        # plt.xscale('log'), plt.yscale('log')
+        plt.xlabel('Pre-MLE Cost'), plt.ylabel('Post-MLE Cost')
+        plt.grid()
+        plt.title('Post-MLE v/s Pre-MLE Training Cost')
+        plt.tight_layout()
         plt.savefig(os.path.join(
-            OUTDIR, "A_eigvals_complex_plane.png"), dpi=220)
-    plt.close()
+            OUTDIR, "iGPK-pr_vs_post-train_cost.png"), dpi=200)
+        plt.close()
 
-    # --- NEW Plot 4: |eigs| vs mode index, per seed (sorted by magnitude) ---
-    plt.figure(figsize=(10, 6))
-    have_any = False
-    for r in runs:
-        ev = r.get("eigvals_A", None)
-        if ev is None:
-            continue
-        have_any = True
-        mags = np.abs(ev)
-        mags_sorted = np.sort(mags)[::-1]
-        plt.plot(np.arange(1, len(mags_sorted) + 1), mags_sorted, linewidth=1.25, alpha=0.85,
-                 label=f"run {r['run_id']}")
+    if True:    # PLOT 3 : PRE and POST MLE COST V/S MEAN TRAIN %-NRMSE
+        fig, ax = plt.subplots(1, 2, sharey=True, figsize=(8, 5))
+        ax[0].scatter(cost_pre, train_nrmse, alpha=0.75)
+        ax[1].scatter(cost_post, train_nrmse, alpha=0.75)
+        # ax[0].set_xscale('log'), ax[1].set_xscale('log')
+        ax[0].set_xlabel('Pre-MLE Cost'), ax[1].set_xlabel('Post-MLE Cost')
+        ax[0].set_ylabel('Train NRMSE [%]')
+        # Cleaner ticks
+        for a in ax:
+            a.grid(True)
+            a.xaxis.set_major_locator(MaxNLocator(nbins=5))
+            # Consistent decimal formatting
+            a.xaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        fig.suptitle('Train NRMSE [%] v/s Pre and Post-MLE Training Cost')
+        plt.tight_layout()
+        plt.savefig(os.path.join(
+            OUTDIR, "iGPK-train_nrmse.png"), dpi=200)
+        plt.close()
 
-    plt.xlabel("Mode index (sorted)")
-    plt.ylabel("|λ|")
-    plt.title("Eigenvalue magnitudes of A across seeds")
-    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
-    if len(runs) <= 12:
-        plt.legend(fontsize=8, ncol=1)
-    plt.tight_layout()
-    if have_any:
-        plt.savefig(os.path.join(OUTDIR, "A_eigvals_magnitudes.png"), dpi=220)
-    plt.close()
+    if True:    # PLOT 4 : POST-MLE COST V/S MEAN TEST %-NRMSE
+        fig, ax = plt.subplots(1, 2, sharey=True, figsize=(8, 5))
+        ax[0].scatter(cost_pre, test_nrmse, alpha=0.75)
+        ax[1].scatter(cost_post, test_nrmse, alpha=0.75)
+        # ax[0].set_xscale('log'), ax[1].set_xscale('log')
+        ax[0].set_xlabel('Pre-MLE Cost'), ax[1].set_xlabel('Post-MLE Cost')
+        ax[0].set_ylabel('Test NRMSE [%]')
+        # Cleaner ticks
+        for a in ax:
+            a.grid(True)
+            a.xaxis.set_major_locator(MaxNLocator(nbins=5))
+            # Consistent decimal formatting
+            a.xaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        fig.suptitle('Test NRMSE [%] v/s Pre and Post-MLE Training Cost')
+        plt.tight_layout()
+        plt.savefig(os.path.join(
+            OUTDIR, "iGPK-test_nrmse.png"), dpi=200)
+        plt.close()
 
-    # Ranked report
-    ranked = sorted(
-        [(r["tag"], r["final_train_cost"])
-         for r in runs if r["final_train_cost"] is not None],
-        key=lambda x: x[1]
-    )
-    report_path = os.path.join(OUTDIR, "iGPK_final_train_cost_ranked.txt")
-    with open(report_path, "w") as f:
-        f.write("tag\tfinal_train_cost\tA_path\n")
-        for r in runs:
-            if r["final_train_cost"] is None:
-                continue
-            f.write(
-                f"{r['tag']}\t{r['final_train_cost']:.6e}\t{r.get('A_path', None)}\n")
+    if True:    # PLOT 5 : POST-MLE COST V/S MEAN TEST NLPD
+        fig, ax = plt.subplots(1, 2, sharey=True, figsize=(8, 5))
+        ax[0].scatter(cost_pre, train_nlpd, alpha=0.75)
+        ax[1].scatter(cost_post, train_nlpd, alpha=0.75)
+        # ax[0].set_xscale('log'), ax[1].set_xscale('log')
+        ax[0].set_xlabel('Pre-MLE Cost'), ax[1].set_xlabel('Post-MLE Cost')
+        ax[0].set_ylabel('Train NLPD')
+        # Cleaner ticks
+        for a in ax:
+            a.grid(True)
+            a.xaxis.set_major_locator(MaxNLocator(nbins=5))
+            # Consistent decimal formatting
+            a.xaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        fig.suptitle('Train NLPD v/s Pre and Post-MLE Training Cost')
+        plt.tight_layout()
+        plt.savefig(os.path.join(
+            OUTDIR, "iGPK-train_nlpd.png"), dpi=200)
+        plt.close()
 
-    # NRMSE Metrics
-    print(f'\n==================================================\n')
-    for r in runs:
-        print(f'==== Z-SEED: {r['z_seed']} || HP-SEED: {r['hp_seed']} ====')
-        Error = 100*r["TrainNRMSE"]
-        print(f'\n==== %-NRMSE Metrics | TRAIN ====\n')
-        print(
-            f'MIN: {Error.min():.3e} || MEDIAN: {Error.median():.3e} || MAX: {Error.max():.3e}\n')
-        print(f'MEAN: {Error.mean():.3e} || STD: {Error.std():.3e}\n')
+    if True:    # PLOT 6 : POST-MLE COST V/S MEAN TEST NLPD
+        fig, ax = plt.subplots(1, 2, sharey=True, figsize=(8, 5))
+        ax[0].scatter(cost_pre, test_nlpd, alpha=0.75)
+        ax[1].scatter(cost_post, test_nlpd, alpha=0.75)
+        # ax[0].set_xscale('log'), ax[1].set_xscale('log')
+        ax[0].set_xlabel('Pre-MLE Cost'), ax[1].set_xlabel('Post-MLE Cost')
+        ax[0].set_ylabel('Test NLPD')
+        # Cleaner ticks
+        for a in ax:
+            a.grid(True)
+            a.xaxis.set_major_locator(MaxNLocator(nbins=5))
+            # Consistent decimal formatting
+            a.xaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        fig.suptitle('Test NLPD v/s Pre and Post-MLE Training Cost')
+        plt.tight_layout()
+        plt.savefig(os.path.join(
+            OUTDIR, "iGPK-test_nlpd.png"), dpi=200)
+        plt.close()
 
-        Error = 100*r["TestNRMSE"]
-        print(f'====== %-NRMSE Metrics | TEST ======\n')
-        print(
-            f'MIN: {Error.min():.3e} || MEDIAN: {Error.median():.3e} || MAX: {Error.max():.3e}')
-        print(f'MEAN: {Error.mean():.3e} || STD: {Error.std():.3e}')
-        print('==================================================')
+    print(f'Finishied Plotting')
 
-    print(f"\nSaved:")
-    print(f"  - {os.path.join(OUTDIR, 'iGPK_init_sweep_runs.pt')}")
-    print(f"  - {os.path.join(OUTDIR, 'cost_histories_log.png')}")
-    print(f"  - {os.path.join(OUTDIR, 'iGPK_final_train_cost_hist.png')}")
-    print(f"  - {os.path.join(OUTDIR, 'A_eigvals_complex_plane.png')}")
-    print(f"  - {os.path.join(OUTDIR, 'A_eigvals_magnitudes.png')}")
-    print(f"  - {report_path}")
+

@@ -5,8 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import time
-from get_iGPK_new import get_iGPK
-from get_R3Koopman import get_R3Koopman
+from get_iGPK_fcn import get_iGPK
 import os
 from datetime import datetime
 
@@ -370,13 +369,29 @@ def run_models_for_noise(
 
     if normalizeData:
         SimData_clean, mu_vec, std_vec = gpk.normalize_data(
-            SimData_raw, nTrain, N)
+            SimData_raw.to(dtype=torch.float32), nTrain, N)
     else:
-        SimData_clean = SimData_raw
+        SimData_clean = SimData_raw.to(dtype=torch.float32)
 
     # 2) Noise
     SimData = gpk.add_noise(SimData_clean, noise_type=noise_type,
                             intensity=intensity, seed=seed)
+    
+    Dataset = {}
+    nx = SimData.shape[1]
+    N = SimData.shape[2] - 1
+    Ns_gpo = 2 * nTrain
+    Dataset['SimData'] = SimData
+    Dataset['X'] = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)],
+                            dim=1)  # (nx, N*nTrain)
+    Dataset['Xplus'] = torch.cat([SimData[j, :, 1:] for j in range(nTrain)],
+                            dim=1)  # (nx, N*nTrain)
+    Dataset['ICsetTrain'] = torch.cat([SimData[j, :, 0].view(nx, 1) 
+        for j in range(nTrain)], dim=1)
+    Dataset['ICsetTest'] = torch.cat([SimData[j, :, 0].view(nx, 1)
+        for j in range(nTrain, nTrain + nTest)], dim=1)
+    Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=Ns_gpo)
+    Dataset['dims'] = (nx, N, Ns_gpo)
 
     print(f'========================================================')
     print(f'========================================================')
@@ -387,16 +402,15 @@ def run_models_for_noise(
     # 3) iGPK
     
     results = get_iGPK(
-        SimData=SimData,
+        Data=Dataset,
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
         max_iter=max_iter,
-        learn_rate=learn_rate,
+        sgd_lr=learn_rate,sgd_m=0.75, stop_tol=1e-4,
         opt_weights=opt_weights,
-        routine=routine,
-        train_method=train_method,
-        hp_scale=kernel_hp_scale,
-        device=device,
+        routine=routine, train_method=train_method,
+        hp_scale=kernel_hp_scale, device=device,
+        traj_batch_size=15, full_cost_eval_every=50,
     )
     t_iGPK = results['history']['opt_time']
 
@@ -426,7 +440,7 @@ def run_models_for_noise(
         SimData=SimData,
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
-        delay=N - 1)
+        delay=N-1)
     t_ssid = time.perf_counter() - t0
 
     # unpack SSID-GPK results

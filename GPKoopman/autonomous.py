@@ -83,6 +83,22 @@ def f_Lorenz(x, params=None):
     return torch.tensor([dx0, dx1, dx2], dtype=torch.float64)
 
 
+def f_Lorenz96(x, params=None):
+    x = x.to(dtype=torch.float64)
+    if params is None:
+        params = x.new_tensor(5.0)
+    
+    dx = (
+        (torch.roll(x, shifts=-1) - torch.roll(x, shifts=2))
+        * torch.roll(x, shifts=1)
+        - x
+        + params[0]
+    )
+
+    return dx
+
+
+
 def f_LotkaVolterra(x, params=None):
     # Common param names = alpha, beta, gamma, delta
     if params is None:
