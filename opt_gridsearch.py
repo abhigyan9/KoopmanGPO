@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore")
 # -----------------------------
 # User configuration
 # -----------------------------
-SYSTEM_NAME = "Cart_data"
+SYSTEM_NAME = "Inhibited Predator-Prey"
 TRAIN_FRAC = 0.60
 TEST_FRAC = 1.0 - TRAIN_FRAC
 CLIP = None
@@ -28,11 +28,11 @@ NOISE_TYPE = "gaussian"
 NOISE_INTENSITY = 0.0
 NOISE_SEED = 100
 
-LIFTING_ORDER = 35
-MAX_ITER = 100000
+LIFTING_ORDER = 10
+MAX_ITER = 50000
 DEVICE = "cuda:0"
 
-LEARN_RATES = [0.02, 0.002, 0.001]
+LEARN_RATES = [0.02, 0.01, 0.001]
 MOMENTUMS = [0.7, 0.75, 0.8]
 STOP_TOLS = [1e-3, 1e-4]
 # LEARN_RATES = [0.001,]
@@ -42,14 +42,14 @@ STOP_TOLS = [1e-3, 1e-4]
 # NEW: trajectory-wise mini-batch sizes.
 # Use None to include one full-batch run.
 # These values are clipped later so batch_size <= nTrain.
-TRAJ_BATCH_SIZES = [10, 15]
+TRAJ_BATCH_SIZES = [20, 30]
 # TRAJ_BATCH_SIZES = [15, ]
 
 # For the modified get_iGPK with trajectory-wise batches.
 FULL_COST_EVAL_EVERY = 50
 
 OPT_WEIGHTS = [1.0, 1.0, 0.0]
-ROUTINE = "Z_only"
+ROUTINE = "standard"  # OR "multi-perturb"
 TRAIN_METHOD = "Zero-Mean"
 
 SEED_Z = 1234
@@ -173,11 +173,11 @@ SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
 
 if NORMALIZE_DATA:
     SimData_clean, mu_vec, std_vec = gpk.normalize_data(
-        SimData_raw.to(dtype=torch.float32), nTrain, N)
+        SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
 else:
     SimData_clean = SimData_raw
 
-hp2_scale = gpk.find_hp_init(SimData_clean, nTrain)
+hp2_scale = gpk.find_hp_init(SimData_clean[nTest:nTest+nTrain, :, :-1])
 hp_scale = [None, hp2_scale, None]
 
 SimData = gpk.add_noise(
@@ -186,28 +186,22 @@ SimData = gpk.add_noise(
     intensity=NOISE_INTENSITY,
     seed=NOISE_SEED,
 )
-nx = SimData.shape[1]
-N = SimData.shape[2] - 1
-nz = LIFTING_ORDER
 
 Dataset = {}
+nx = SimData.shape[1]
+N = SimData.shape[2] - 1
+Ns_gpo = 1 * nTrain
 Dataset['SimData'] = SimData
-
-Dataset['X'] = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)],
+Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                         dim=1)  # (nx, N*nTrain)
-
-Dataset['Xplus'] = torch.cat([SimData[j, :, 1:] for j in range(nTrain)],
+Dataset['Xplus'] = torch.cat([SimData[nTest+j, :, 1:] for j in range(nTrain)],
                         dim=1)  # (nx, N*nTrain)
-
-Dataset['ICsetTrain'] = torch.cat([SimData[j, :, 0].view(nx, 1) 
+Dataset['ICsetTrain'] = torch.cat([SimData[nTest+j, :, 0].view(nx, 1) 
     for j in range(nTrain)], dim=1)
-
 Dataset['ICsetTest'] = torch.cat([SimData[j, :, 0].view(nx, 1)
-    for j in range(nTrain, nTrain + nTest)], dim=1)
-
-Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=nTrain)
-
-Dataset['dims'] = (nx, N)
+    for j in range(nTest)], dim=1)
+Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=Ns_gpo)
+Dataset['dims'] = (nx, N, Ns_gpo)
 
 # Clean and validate batch sizes after nTrain is known.
 TRAJ_BATCH_SIZES_CLEAN = []
@@ -266,7 +260,6 @@ for run_idx, (lr, momentum, traj_batch_size, stop_tol) in enumerate(grid, start=
         f"lr={lr:.2e}, momentum={momentum:.2f}, "
         f"traj_batch_size={b_label}, stop_tol={stop_tol:.1e}"
     )
-    print(f'Used batch size = {traj_batch_size}')
 
     results = get_iGPK(
         Data=Dataset,

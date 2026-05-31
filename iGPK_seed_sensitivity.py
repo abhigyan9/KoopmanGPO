@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import GPKoopman as gpk
+from get_iGPK_fcn import FULL_COST_EVAL_EVERY
 from get_iGPK_new import get_iGPK
 from matplotlib.ticker import MaxNLocator, FormatStrFormatter
 
@@ -232,7 +233,7 @@ if __name__ == "__main__":
     SimData_clean, mu_vec, std_vec = gpk.normalize_data(SimData_raw, nTrain, N)
 
     # 2) Find Initial Hyperparameter
-    HP_INIT = find_hp_init(SimData_clean, nTrain)
+    HP_INIT = gpk.find_hp_init(SimData_clean[nTest:nTest+nTrain, :, :-1])
     print(f'Heuristic Kernel-lengthscale param found to be {HP_INIT:.3e}')
 
     # 1.2) Add Noise - Optional
@@ -242,6 +243,9 @@ if __name__ == "__main__":
     # 2) RUN EXPERIMENTS
     runs = []
     run_id = 0
+
+    BATCH_SIZE = 15
+    FULL_COST_EVAL_EVERY = 50
 
     for z_seed in z_seeds:
 
@@ -255,7 +259,10 @@ if __name__ == "__main__":
                         MAX_ITER, sgd_lr=SGD_LR, sgd_m=SGD_MOM,
                         opt_weights=OPT_WEIGHTS, routine=ROUTINE,
                         train_method=TRAIN_METHOD, hp_scale=[None, HP_INIT, None],
-                        seed_z=z_seed, seed_hp=hp_seed)
+                        seed_z=z_seed, seed_hp=hp_seed,
+                        traj_batch_size=BATCH_SIZE,
+                        full_cost_eval_every=FULL_COST_EVAL_EVERY,
+                        )
 
             # Pull metrics
             final_cost_mle = results['history']['post_mle_cost']

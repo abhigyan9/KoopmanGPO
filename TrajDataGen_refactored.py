@@ -381,7 +381,7 @@ def generate_dataset(
     # Use the legacy NumPy RandomState so identical seeds reproduce the
     # same initial conditions as the older TrajDataGen_A script.
     # rng = np.random.RandomState(cfg["seed"])
-    np.random.seed(1234)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed=cfg["seed"])
 

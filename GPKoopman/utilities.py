@@ -27,7 +27,7 @@ def compare_model_predictions(
     title_suffix="",
     *,
     split="train",                    # "train" or "test"
-    sim_offset=0,                     # e.g., nTrain for test set
+    sim_offset=0,                     # e.g., nTest for train set
     compare_to="SimData",             # "SimData" or "SimData_clean"
     SimData_clean=None,               # required if compare_to="SimData_clean"
     sigma=1.0,                        # number of std-devs for bands (iGPK)
@@ -126,17 +126,13 @@ def compare_model_predictions(
         # Ground truth
         gt = GT[sim_offset + idx, s, :N].cpu().numpy()
         # choose about 20 evenly spaced marker points
-        n_markers = 20
-        marker_idx = np.linspace(0, N - 1, n_markers, dtype=int)
-
-        ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black", alpha=0.75,
-                label=gt_label)
-
+        # n_markers = 20
+        # marker_idx = np.linspace(0, N - 1, n_markers, dtype=int)
         # overlay sparse markers for clarity
         # ax.plot(time[marker_idx], gt[marker_idx], marker='o', linestyle='--',
         #         linewidth=1.3, color="black", markersize=4, alpha=0.8, label='Truth')
 
-        # Overlay all models
+        # Overlay all models predictions
         for k, model in enumerate(models):
             name = model.get("name", f"Model {k+1}")
             pack = model[split]
@@ -156,6 +152,10 @@ def compare_model_predictions(
                 lower = (Xhat - sigma * std_s).cpu().numpy()
                 upper = (Xhat + sigma * std_s).cpu().numpy()
                 ax.fill_between(time, lower, upper, alpha=0.16, color=col)
+        
+        # Ground truth (plotted last for visibility)
+        ax.plot(time, gt, linestyle="--", linewidth=1.3, color="black",
+                alpha=0.75, label=gt_label)
 
         if y_labels is None:
             ax.set_ylabel(f"X{s+1}")
@@ -261,7 +261,7 @@ def plot_time_series_with_bounds(time, Xhat, Xcvhat, SimData, idx, N, system_nam
         N           : Number of time steps to plot.
         system_name : Name of the system (for labeling).
         title_suffix: Suffix for the plot title.
-        sim_offset  : Offset for SimData indexing (e.g., nTrain for test trajectories).
+        sim_offset  : Offset for SimData indexing (e.g., nTest for train trajectories).
     """
     n_states = Xhat.shape[1]
     fig, axes = plt.subplots(n_states, 1, figsize=(6, 5))
@@ -305,7 +305,7 @@ def plot_phase(Xhat, SimData, ICset, idx, N, system_name, title_suffix, sim_offs
         N          : Number of time steps to plot.
         system_name: Name of the system (for labeling).
         title      : Title for the plot.
-        sim_offset : Offset for SimData indexing (e.g., nTrain for test trajectories).
+        sim_offset : Offset for SimData indexing (e.g., nTest for train trajectories).
     """
     n_states = Xhat.shape[1]
 
@@ -360,7 +360,7 @@ def plot_phase_w_bounds(Xhat, SimData, ICset, idx, N, system_name, title_suffix,
         N             : Number of time steps to plot.
         system_name   : Name of the system (for labeling).
         title         : Title for the plot.
-        sim_offset    : Offset for SimData indexing (e.g., nTrain for test trajectories).
+        sim_offset    : Offset for SimData indexing (e.g., nTest for train trajectories).
         Xcvhat        : (Optional) Array of state covariance estimates with shape 
                         (trajectories, states, states, time_steps).
         ellipse_interval: Interval (in time steps) at which to plot error ellipses.
@@ -431,7 +431,7 @@ def plot_phase_w_bounds(Xhat, SimData, ICset, idx, N, system_name, title_suffix,
         raise ValueError('Size of Xhat in dimension 1 has to be 2 or 3')
 
 
-def plot_predicted_sd_error(XcvhatTest, SimData, XhatTest, idx, N, nTrain, trajectory_label):
+def plot_predicted_sd_error(XcvhatTest, SimData, XhatTest, idx, N, offset, trajectory_label):
     """
     Plots the predicted standard deviation (SD) and absolute error for a given test trajectory.
 
@@ -441,7 +441,7 @@ def plot_predicted_sd_error(XcvhatTest, SimData, XhatTest, idx, N, nTrain, traje
         XhatTest        : Tensor of predicted state estimates, shape (trajectories, states, time_steps).
         idx             : Index of the trajectory to plot.
         N               : Number of time steps to plot.
-        nTrain          : Offset for test trajectories in SimData.
+        offset          : Offset for trajectories in SimData (eg. nTest for train trajectories).
         trajectory_label: String label for the trajectory (e.g., "Worst Test", "Best Test").
     """
     n = XhatTest.shape[1]
@@ -459,7 +459,7 @@ def plot_predicted_sd_error(XcvhatTest, SimData, XhatTest, idx, N, nTrain, traje
         sigma = (torch.abs(XcvhatTest[idx, i, i, :N-1]) ** 0.5)
         # Compute absolute error between true and predicted values
         error = torch.abs(
-            SimData[nTrain+idx, i, :N-1] - XhatTest[idx, i, :N-1])
+            SimData[offset+idx, i, :N-1] - XhatTest[idx, i, :N-1])
 
         # Optionally, convert tensors to NumPy for plotting (if needed)
         sigma = sigma.detach().cpu().numpy()
@@ -560,7 +560,7 @@ def MatViz(matrix: torch.Tensor, plot_type: str = 'surf'):
         # plt.show()
 
 
-def plot_eigen(A):  # Eigen value plot of Koopman Matrices
+def plot_eigen(A:torch.Tensor, tol:float=1e-9, legend:bool=False):  # Eigen value plot of Koopman Matrices
     A = A.detach().cpu()
     eigval = torch.linalg.eigvals(A)
 
@@ -573,13 +573,23 @@ def plot_eigen(A):  # Eigen value plot of Koopman Matrices
 
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
     # First subplot: Eigenvalues plot
-    axes[0].plot(unitCirclex, unitCircley, color='orange', label='Unit Circle')
-    for i in range(np.size(eig_mag)):
-        if eig_mag[i] <= 1:
-            axes[0].scatter(eigreal, eigimag, color='green',
-                            label='Eigenvalues')
-        else:
-            axes[0].scatter(eigreal, eigimag, color='red', label='Eigenvalues')
+    axes[0].plot(unitCirclex, unitCircley, color='blue', label='Unit Circle',
+                 linestyle='-', linewidth=1.0, alpha=0.7, zorder=1)
+
+    # Classify points by magnitude
+    is_zero = np.isclose(eig_mag, 0.0, atol=tol)
+    is_one = np.isclose(eig_mag, 1.0, atol=tol) & ~is_zero
+    less_than_one = (eig_mag < 1.0 - tol) & ~is_zero
+    greater_than_one = eig_mag > 1.0 + tol
+
+    if np.any(is_zero):
+        axes[0].scatter(eigreal[is_zero], eigimag[is_zero], color='black', label='|eig| = 0', zorder=3)
+    if np.any(is_one):
+        axes[0].scatter(eigreal[is_one], eigimag[is_one], color='orange', label='|eig| = 1', zorder=3)
+    if np.any(less_than_one):
+        axes[0].scatter(eigreal[less_than_one], eigimag[less_than_one], color='green', label='|eig| < 1', zorder=3)
+    if np.any(greater_than_one):
+        axes[0].scatter(eigreal[greater_than_one], eigimag[greater_than_one], color='red', label='|eig| > 1', zorder=3)
 
     axes[0].axhline(0, color='black', linewidth=0.5, linestyle='--')
     axes[0].axvline(0, color='black', linewidth=0.5, linestyle='--')
@@ -587,7 +597,8 @@ def plot_eigen(A):  # Eigen value plot of Koopman Matrices
     axes[0].set_xlabel("Real Part")
     axes[0].set_ylabel("Imaginary Part")
     axes[0].grid(True)
-    axes[0].legend(labels=['Unit Circle', 'Eignevalues'], loc='upper right')
+    if legend:
+        axes[0].legend(loc='upper right', fontsize='small')
 
     # Second subplot: Heatmap of matrix A
     im = axes[1].imshow(A.detach().numpy(), cmap='viridis', aspect='auto')
@@ -597,40 +608,6 @@ def plot_eigen(A):  # Eigen value plot of Koopman Matrices
     axes[1].set_ylabel("Rows")
     plt.tight_layout()
     return fig
-
-
-# K-Means Clusting helper function
-
-# def get_kmeans(data, num_centers=1):
-#     """
-#     Compute K-Means clustering for the given data and return cluster centroids.
-
-#     Args:
-#         data (torch.Tensor or np.ndarray): Data of shape (dimension, samples).
-#         num_centers (int): Number of cluster centers (clusters) to compute.
-
-#     Returns:
-#         torch.Tensor: Cluster centroids of shape (dimension, num_centers).
-#     """
-#     # Convert data to NumPy array if necessary
-#     if isinstance(data, torch.Tensor):
-#         data_np = data.detach().cpu().numpy()
-#     else:
-#         data_np = np.array(data)
-
-#     # Transpose data to shape (samples, dimension) for scikit-learn
-#     data_np = data_np.T
-
-#     # Perform k-means clustering
-#     kmeans = KMeans(n_clusters=num_centers, random_state=0).fit(data_np)
-
-#     # Get centroids; shape will be (num_centers, dimension)
-#     centroids_np = kmeans.cluster_centers_
-
-#     # Convert centroids to a torch tensor and transpose to shape (dimension, num_centers)
-#     centroids = torch.from_numpy(centroids_np.T).float()
-
-#     return centroids
 
 
 def get_kmeans(data, num_centers=1, seed=0, dtype=torch.float32):
@@ -685,11 +662,7 @@ def get_kmeans(data, num_centers=1, seed=0, dtype=torch.float32):
     centroids_np = centroids_np[order]
 
     # Return shape: (dimension, num_centers)
-    centroids = torch.as_tensor(
-        centroids_np.T,
-        dtype=dtype,
-        device=device,
-    )
+    centroids = torch.as_tensor(centroids_np.T, dtype=dtype, device=device)
 
     return centroids
 
@@ -797,32 +770,49 @@ def nlpd_per_traj(Xhat:torch.Tensor, Xcv:torch.Tensor, GT:torch.Tensor):
 
 # Data Pre-Processing Tools
 
-
-def load_SimData(system_name, trainFrac, testFrac, clip=None):
+def load_SimData(system_name:str,
+                 trainFrac:float, testFrac:float,
+                 clip:int | None = None, normalize:bool=False):
+    """
+    Loads and optionally clips and normalizes trajectory data.
+    Number of outputs vary if normalize = True.
+    """
     data = torch.load(f"Data/DataAuto_{system_name}.pt", weights_only=True)
-    # Shape: (num_trajectories, state_dim, num_steps)
-    SimData = data["trajectories"]
+    SimData = data["trajectories"]  # Shape: (num_trajectories, state_dim, num_steps)
     ts = data["sample_time"]
     num_trajectories, N = data["num_trajectories"], data["num_steps"]
 
-    nTrain, nTest = math.floor(
-        num_trajectories * trainFrac), math.floor(num_trajectories * testFrac)
+    if (trainFrac + testFrac) <= 1.0:
+        nTest = math.floor(num_trajectories * testFrac)
+        nTrain = math.floor(num_trajectories * trainFrac)
+    else:
+        raise ValueError('Sum of trainFrac and testFrac should be leq 1.')
+
     if clip is not None:
         SimData = SimData[:, :, :clip+1]
         N = clip
+    
+    if normalize is True:
+        SimData, mu_vec, std_vec = normalize_data(SimData_raw=SimData,
+                                    nTest=nTest, nTrain=nTrain, N=N)
+        
+        return SimData, mu_vec, std_vec, ts, num_trajectories, N, nTrain, nTest
+    else:
+        return SimData, ts, num_trajectories, N, nTrain, nTest
 
-    return SimData, ts, num_trajectories, N, nTrain, nTest
 
-
-def normalize_data(SimData_raw, nTrain, N):
-    # Compute normalization stats over training split only
+def normalize_data(SimData_raw:torch.Tensor,
+                   nTest:int, nTrain:int, N:int):
+    """
+    Normalizes entire dataset using training set statistics
+    """
     # SimData shape: (num_traj, state_dim, num_steps)
-    mu_vec = SimData_raw[:nTrain, :, :N].mean(
+    mu_vec = SimData_raw[nTest:(nTest+nTrain), :, :N].mean(
         dim=(0, 2))                                # (n,)
-    std_vec = SimData_raw[:nTrain, :, :N].std(
+    std_vec = SimData_raw[nTest:(nTest+nTrain), :, :N].std(
         dim=(0, 2), unbiased=False).clamp_min(1e-8)  # (n,)
 
-    # Apply normalization to ALL trajectories (train+test); keep everything on CPU for now
+    # Apply normalization to ALL trajectories (train+test)
     SimData = (SimData_raw - mu_vec.view(1, -1, 1)) / std_vec.view(1, -1, 1)
     return SimData, mu_vec, std_vec
 
@@ -871,8 +861,12 @@ def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=1111):
     return SimData_norm + noise
 
 
-def find_hp_init(SimData, nTrain, max_pairs=5_000_000):
-    X = SimData[:nTrain, :, :-1].permute(0, 2, 1).reshape(-1, SimData.shape[1])
+def find_hp_init(dataset:torch.Tensor, max_pairs:float=5_000_000)->float:
+    """
+    Finds the median pair-wise distance in the dataset.
+    - dataset must be torch.Tensor of shape (trajectories, states, steps).
+    """
+    X = dataset.permute(0, 2, 1).reshape(-1, dataset.shape[1])
     X = X.detach().cpu().numpy()
 
     npts = X.shape[0]

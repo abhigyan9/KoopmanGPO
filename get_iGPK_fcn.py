@@ -176,7 +176,7 @@ def get_iGPK(
     sgd_m: float = 0.8,
     stop_tol: float = 1e-6,
     opt_weights: list[float] = [1., 1., 0.01],
-    routine: str = "Z_only",        # currently unused
+    routine: str = "standard",        # OR "multi-perturb" - to be implemented
     train_method: str = "Zero-Mean",  # Zero-Mean | Monomials
     hp_scale: list[float] = [None, 1.0, None],  # [hp1, hp2, _]
     device: str | torch.device = "cuda:0",
@@ -221,10 +221,6 @@ def get_iGPK(
     # Initialize manager and decision variable Z
     # ------------------------------------------------------------
     if train_method == "Zero-Mean":
-        # Xtrain = torch.cat(
-        #     [X[:, j * N: j * N + 1] for j in range(nTrain)],
-        #     dim=1
-        # )  # (nx, nTrain)
 
         torch.manual_seed(seed=seed_z)
 
@@ -237,7 +233,7 @@ def get_iGPK(
                 monomial = gpk.MonomialMean(powers=monomial_powers[i])
                 Z_raw[:, i] = monomial(Xtrain).squeeze(dim=1)
             else:
-                Z_raw[:, i] = hp_scale[1] * torch.rand(
+                Z_raw[:, i] += hp_scale[1] * torch.rand(
                     Ns_gpo, 1).squeeze(dim=1)
 
         Z = torch.nn.Parameter(Z_raw.to(device=device))
@@ -260,23 +256,12 @@ def get_iGPK(
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
 
         for i in range(nz):
-            ObsManager.train_observable(
-                i,
-                Xtrain,
-                Z[:, i].unsqueeze(dim=1),
-            )
+            ObsManager.train_observable(i, Xtrain, Z[:, i:i+1])
 
     elif train_method == "Monomials":
-        Xtrain = torch.cat(
-            [X[:, j * N: j * N + 1] for j in range(nTrain)],
-            dim=1
-        )  # (nx, nTrain)
-
         torch.manual_seed(seed=seed_z)
 
-        Z = torch.nn.Parameter(
-            torch.rand(nTrain, nz, device=device)
-        )
+        Z = torch.nn.Parameter(torch.rand(nTrain, nz, device=device))
 
         monomial_powers = generate_monomial_powers(nx, total_orders=(1, 2, 3))
         num_monomial_means = min(nz, len(monomial_powers))
@@ -292,7 +277,7 @@ def get_iGPK(
             ObsManager.add_observable(
                 index=i,
                 d=nx,
-                Ns=nTrain,
+                Ns=Ns_gpo,
                 kernel=kernel,
                 prior_mean=prior_mean,
                 noise=1e-6,
@@ -304,12 +289,8 @@ def get_iGPK(
 
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
 
-        for i in range(nz):
-            ObsManager.train_observable(
-                i,
-                Xtrain,
-                Z[:, i].unsqueeze(dim=1),
-            )
+        for i in range(nz): # train GPOs
+            ObsManager.train_observable(i, Xtrain, Z[:, i:i+1])
 
     else:
         raise ValueError(f"Unrecognized train_method: {train_method}")
@@ -379,31 +360,10 @@ def get_iGPK(
 
     traj_batch_size = int(min(traj_batch_size, nTrain))
 
-    if traj_batch_size <= 0:
-        raise ValueError("traj_batch_size must be positive or None.")
-
-    batch_num_samples = traj_batch_size * N
-
-    if batch_num_samples < nz:
-        warnings.warn(
-            f"traj_batch_size * N = {batch_num_samples} < nz = {nz}. "
-            "The mini-batch Gram matrix M @ M.T may be rank deficient. "
-            "Consider increasing traj_batch_size.",
-            RuntimeWarning,
-        )
-
-    if sgd_m == 0.0 or sgd_m is None:
-        optimizer = torch.optim.SGD(
-            [Z],
-            lr=sgd_lr,
-            nesterov=False,
-        )
-    else:
-        optimizer = torch.optim.SGD(
-            [Z], lr=sgd_lr, momentum=sgd_m, nesterov=True)
+    optimizer = torch.optim.SGD([Z], lr=sgd_lr, momentum=sgd_m, nesterov=True)
 
     # ------------------------------------------------------------
-    # Helper: full-trajectory batch column indices
+    # Internal Helpers
     # ------------------------------------------------------------
     def _trajectory_batch_columns(traj_idx: torch.Tensor) -> torch.Tensor:
         """
@@ -416,27 +376,48 @@ def get_iGPK(
         col_idx = traj_idx[:, None] * N + time_idx[None, :]
         return col_idx.reshape(-1)
 
+    def _perturb_Z_():
+        """Perturb Z in-place using a scale tied to the current Z magnitude."""
+        with torch.no_grad():
+            z_std = Z.detach().std()
+            z_mean_abs = Z.detach().abs().mean()
+            z_scale = torch.maximum(z_std, z_mean_abs)
+            perturb_std = max(1e-4, 1e-2 * float(z_scale.item()))
+            Z.add_(perturb_std * torch.randn_like(Z))
+
+    def _full_cost_() -> float:
+        """Evaluate the full training cost at the current Z."""
+        with torch.no_grad():
+            full_cost = get_cost_simple_fast(
+                Z, X_dev, G_X, G_Xplus,
+                lambda1=lam1, lambda2=lam2, lambda3=lam3,
+                Mp_X0=Mp_X0, Mp_X=Mp_X, Mp_Xplus=Mp_Xplus,
+                num_total_samples=None)
+
+        return float(full_cost.item())
     # ------------------------------------------------------------
     # Initial full cost and checkpoint
     # ------------------------------------------------------------
     checkpoints = {}
+    num_perturb = 0
+    initial_full_cost = _full_cost_()
 
-    with torch.no_grad():
-        initial_full_cost = get_cost_simple_fast(
-            Z,
-            X_dev,
-            G_X,
-            G_Xplus,
-            lambda1=lam1,
-            lambda2=lam2,
-            lambda3=lam3,
-            Mp_X0=Mp_X0,
-            Mp_X=Mp_X,
-            Mp_Xplus=Mp_Xplus,
-            num_total_samples=None,
-        )
+    # with torch.no_grad():
+    #     initial_full_cost = get_cost_simple_fast(
+    #         Z,
+    #         X_dev,
+    #         G_X,
+    #         G_Xplus,
+    #         lambda1=lam1,
+    #         lambda2=lam2,
+    #         lambda3=lam3,
+    #         Mp_X0=Mp_X0,
+    #         Mp_X=Mp_X,
+    #         Mp_Xplus=Mp_Xplus,
+    #         num_total_samples=None,
+    #     )
 
-    best_full_cost = float(initial_full_cost.item())
+    best_full_cost = initial_full_cost
     best_iter = 0
     optimal_Z = Z.detach().clone()
 
@@ -452,10 +433,7 @@ def get_iGPK(
     # Trajectory-wise batch-SGD loop
     # ------------------------------------------------------------
     while iter < max_iter:
-
-        # --------------------------------------------------------
         # Select a batch of complete trajectories
-        # --------------------------------------------------------
         if traj_batch_size == nTrain:
             traj_idx = torch.arange(nTrain, device=device)
         else:
@@ -473,9 +451,7 @@ def get_iGPK(
         else:
             Mp_X_b, Mp_Xplus_b = None, None
 
-        # --------------------------------------------------------
         # Mini-batch SGD update
-        # --------------------------------------------------------
         optimizer.zero_grad(set_to_none=True)
         cost = get_cost_simple_fast(Z, X_b, G_X_b, G_Xplus_b,
             lambda1=lam1, lambda2=lam2, lambda3=lam3,
@@ -492,9 +468,7 @@ def get_iGPK(
 
         iter += 1
 
-        # --------------------------------------------------------
         # Periodic full-cost evaluation for checkpointing/stopping
-        # --------------------------------------------------------
         do_full_eval = (
             iter == 1
             or iter % full_cost_eval_every == 0
@@ -502,22 +476,7 @@ def get_iGPK(
         )
 
         if do_full_eval:
-            with torch.no_grad():
-                full_cost = get_cost_simple_fast(
-                    Z,
-                    X_dev,
-                    G_X,
-                    G_Xplus,
-                    lambda1=lam1,
-                    lambda2=lam2,
-                    lambda3=lam3,
-                    Mp_X0=Mp_X0,
-                    Mp_X=Mp_X,
-                    Mp_Xplus=Mp_Xplus,
-                    num_total_samples=None,
-                )
-
-            full_cost_val = float(full_cost.item())
+            full_cost_val = _full_cost_()
             full_cost_history.append(full_cost_val)
 
             if full_cost_val < best_full_cost:
@@ -530,37 +489,48 @@ def get_iGPK(
                     "cost_val": best_full_cost,
                 }
 
-            # Use full-cost relative change, not mini-batch cost,
-            # for stopping.
+            # Full cost is used for stopping/perturb
             if iter > 1000:
-                rel_change = (
-                    full_cost_history[-2] - full_cost_val
-                ) / max(abs(full_cost_history[-2]), 1e-12)
+                rel_change = ( full_cost_history[-4] - full_cost_val
+                    ) / max(abs(full_cost_history[-4]), 1e-12)
+                
+                if num_perturb < 20:
+                    stagnated = rel_change > 0 and rel_change < (stop_tol)
+                else:
+                    stagnated = rel_change > 0 and rel_change < (stop_tol/10)
 
-                if rel_change > 0 and rel_change < stop_tol:
-                    break
+                if stagnated:
+                    if routine == "multi-perturb" and num_perturb < 20:
+                        num_perturb += 1
+
+                        _perturb_Z_()
+                        optimizer = torch.optim.SGD([Z],
+                                        lr=sgd_lr, momentum=sgd_m, nesterov=True)
+
+                        perturbed_full_cost_val = _full_cost_()
+                        full_cost_history.append(perturbed_full_cost_val)
+
+                        checkpoints[f"{iter}_perturb{num_perturb}"] = {
+                            "Z_val": Z.detach().clone(),
+                            "cost_val": perturbed_full_cost_val,
+                        }
+
+                        if perturbed_full_cost_val < best_full_cost:
+                            best_full_cost = perturbed_full_cost_val
+                            best_iter = iter
+                            optimal_Z = Z.detach().clone()
+
+                        full_cost_val = perturbed_full_cost_val
+
+                    else:
+                        break
 
             last_full_cost = full_cost_val
 
     # ------------------------------------------------------------
     # Make sure final iterate is considered
     # ------------------------------------------------------------
-    with torch.no_grad():
-        final_full_cost = get_cost_simple_fast(
-            Z,
-            X_dev,
-            G_X,
-            G_Xplus,
-            lambda1=lam1,
-            lambda2=lam2,
-            lambda3=lam3,
-            Mp_X0=Mp_X0,
-            Mp_X=Mp_X,
-            Mp_Xplus=Mp_Xplus,
-            num_total_samples=None,
-        )
-
-    final_full_cost_val = float(final_full_cost.item())
+    final_full_cost_val = _full_cost_()
 
     if final_full_cost_val < best_full_cost:
         best_full_cost = final_full_cost_val
@@ -571,6 +541,23 @@ def get_iGPK(
         "Z_val": Z.detach().clone(),
         "cost_val": final_full_cost_val,
     }
+
+    # ------------------------------------------------------------
+    # Select optimal_Z from the lowest-cost checkpoint
+    # ------------------------------------------------------------
+    best_key, best_checkpoint = min(
+        checkpoints.items(),
+        key=lambda item: item[1]["cost_val"],
+    )
+    optimal_Z = best_checkpoint["Z_val"].detach().clone()
+    best_full_cost = float(best_checkpoint["cost_val"])
+
+    try:
+        best_iter = int(str(best_key).split("_")[0])
+        print(f'Iteration {best_iter} selected with full cost {best_full_cost:.6f}')
+    except ValueError:
+        print(f'Using last iter as best_iter')
+        best_iter = iter
 
     # ------------------------------------------------------------
     # Retrain GPs at optimal Z
@@ -600,7 +587,7 @@ def get_iGPK(
         C,
         ICsetTrain,
         SimData,
-        traj_offset=0,
+        traj_offset=nTest,
     )
 
     XhatTest, XcvTest, TestNRMSE = gpk.sim_and_eval(
@@ -609,7 +596,7 @@ def get_iGPK(
         C,
         ICsetTest,
         SimData,
-        traj_offset=nTrain,
+        traj_offset=0,
     )
 
     # ------------------------------------------------------------
@@ -637,7 +624,6 @@ def get_iGPK(
     # ------------------------------------------------------------
     # Package results
     # ------------------------------------------------------------
-    # print(f'Cost Goes: {cost_history[0]:.3e} to {cost_history[-1]:.3e}')
     return {
         "ObsManager": ObsManager,
         "A": A,
@@ -683,9 +669,9 @@ if __name__ == "__main__":
     NOISE_INTENSITY = 0.0
     NOISE_SEED = 100
     # unused, samples, iterations, inner iterations
-    MAX_ITER = 200000
+    MAX_ITER = int(500_000)
     OPT_WEIGHTS = [1.0, 1.0, 0.0]
-    ROUTINE = "Z-only"
+    ROUTINE = "multi-perturb"  # OR "multi-perturb"
     TRAIN_METHOD = "Zero-Mean"
     DEVICE = "cuda:0"
     SEED_Z = 1234
@@ -695,11 +681,14 @@ if __name__ == "__main__":
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
+    print(f'num_train: {nTrain}, num_test: {nTest}, num_steps: {N}')
+
+    SimData_raw = torch.flip(SimData_raw, dims=[0])
     SimData_clean, mu_vec, std_vec = gpk.normalize_data(
-        SimData_raw.to(dtype=torch.float32), nTrain, N)
+        SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
 
     # 2) Find Initial Hyperparameter
-    HP_INIT = gpk.find_hp_init(SimData_clean, nTrain)
+    HP_INIT = gpk.find_hp_init(SimData_clean[nTest:nTest+nTrain, :, :-1])
     print(f'Heuristic Kernel-lengthscale param found to be {HP_INIT:.3e}')
     hp_scale = [None, HP_INIT, None]
 
@@ -710,16 +699,16 @@ if __name__ == "__main__":
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 2 * nTrain
+    Ns_gpo = 1 * nTrain
     Dataset['SimData'] = SimData
-    Dataset['X'] = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)],
+    Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
-    Dataset['Xplus'] = torch.cat([SimData[j, :, 1:] for j in range(nTrain)],
+    Dataset['Xplus'] = torch.cat([SimData[nTest+j, :, 1:] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
-    Dataset['ICsetTrain'] = torch.cat([SimData[j, :, 0].view(nx, 1) 
+    Dataset['ICsetTrain'] = torch.cat([SimData[nTest+j, :, 0].view(nx, 1) 
         for j in range(nTrain)], dim=1)
     Dataset['ICsetTest'] = torch.cat([SimData[j, :, 0].view(nx, 1)
-        for j in range(nTrain, nTrain + nTest)], dim=1)
+        for j in range(nTest)], dim=1)
     Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=Ns_gpo)
     Dataset['dims'] = (nx, N, Ns_gpo)
 
@@ -731,9 +720,9 @@ if __name__ == "__main__":
         nTest=nTest,
         lifting_order=LIFTING_ORDER,
         max_iter=MAX_ITER,
-        sgd_lr=2e-2,
+        sgd_lr=1e-3,
         sgd_m=0.75,
-        stop_tol=1e-4,
+        stop_tol=1e-5,
         opt_weights=OPT_WEIGHTS,
         routine=ROUTINE,
         train_method=TRAIN_METHOD,
@@ -783,9 +772,9 @@ if __name__ == "__main__":
 
         # a) 3 trajectory overlays
         for (which, idx, split, sim_offset, suffix) in [
-            ("best-train", idx_trainMIN, "train", 0,         "Best_Train"),
-            ("best-test",  idx_testMIN,  "test",  nTrain,    "Best_Test"),
-            ("worst-test", idx_testMAX,  "test",  nTrain,    "Worst_Test"),
+            ("best-train", idx_trainMIN, "train", nTest,         "Best_Train"),
+            ("best-test",  idx_testMIN,  "test",  0,    "Best_Test"),
+            ("worst-test", idx_testMAX,  "test",  0,    "Worst_Test"),
         ]:
             gpk.compare_model_predictions(
                 time=time_arr, models=models, SimData=SimData, idx=idx, N=(
@@ -799,25 +788,25 @@ if __name__ == "__main__":
         fig, ax1 = plt.subplots()
         color = 'tab:blue'
         ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('log(Cost)', color=color)
+        ax1.set_ylabel('log(Full Cost)', color=color)
         ax1.plot(torch.log10(torch.abs(cost_history)), color=color)
         ax1.tick_params(axis='y', labelcolor=color)
         ax1.grid(True, which='both', linestyle='--', alpha=0.7)
         ax2 = ax1.twinx()
         color = 'tab:red'
-        ax2.set_ylabel('Cost', color=color)
+        ax2.set_ylabel('Full Cost', color=color)
         ax2.plot(cost_history, color=color)
         ax2.tick_params(axis='y', labelcolor=color)
         fig.tight_layout()
 
-        print(f'Post-MLE Cost: {results['history']['post_mle_cost']:.3e}')
+        print(f'Post-MLE Full Cost: {results['history']['post_mle_cost']:.3e}')
         # plt.plot(results["history"]['mean_grad'])
 
         ### NLPD Calulation
         def _ms(x):
             return float(x.mean()), float(x.std(unbiased=False))
 
-        GT_test = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
+        GT_test = SimData[:nTest, :, :N-1]  # (nTest, n, N)
 
         nlpd_traj_test_igpk = gpk.nlpd_per_traj(
             XhatTest[:, :, :N-1], XcvhatTest[:, :, :, :N-1], GT_test).detach().cpu()
