@@ -225,7 +225,7 @@ def get_iGPK(
         torch.manual_seed(seed=seed_z)
 
         Z_raw = torch.zeros((Ns_gpo, nz))
-        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2,3))
+        monomial_powers = generate_monomial_powers(nx, total_orders=(1,))
         num_monomial_means = min(nz, len(monomial_powers))
 
         for i in range(nz):
@@ -233,8 +233,7 @@ def get_iGPK(
                 monomial = gpk.MonomialMean(powers=monomial_powers[i])
                 Z_raw[:, i] = monomial(Xtrain).squeeze(dim=1)
             else:
-                Z_raw[:, i] += hp_scale[1] * torch.rand(
-                    Ns_gpo, 1).squeeze(dim=1)
+                Z_raw[:, i] += torch.rand(Ns_gpo, 1).squeeze(dim=1)
 
         Z = torch.nn.Parameter(Z_raw.to(device=device))
 
@@ -246,11 +245,11 @@ def get_iGPK(
                 Ns=Ns_gpo,
                 kernel=kernel,
                 prior_mean=None,
-                noise=1e-6,
+                noise=1e-4,
                 device=device,
                 beta=20.0,
                 thresh=20.0,
-                eps=1e-12,
+                eps=1e-8,
             )
 
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
@@ -402,21 +401,6 @@ def get_iGPK(
     num_perturb = 0
     initial_full_cost = _full_cost_()
 
-    # with torch.no_grad():
-    #     initial_full_cost = get_cost_simple_fast(
-    #         Z,
-    #         X_dev,
-    #         G_X,
-    #         G_Xplus,
-    #         lambda1=lam1,
-    #         lambda2=lam2,
-    #         lambda3=lam3,
-    #         Mp_X0=Mp_X0,
-    #         Mp_X=Mp_X,
-    #         Mp_Xplus=Mp_Xplus,
-    #         num_total_samples=None,
-    #     )
-
     best_full_cost = initial_full_cost
     best_iter = 0
     optimal_Z = Z.detach().clone()
@@ -491,13 +475,13 @@ def get_iGPK(
 
             # Full cost is used for stopping/perturb
             if iter > 1000:
-                rel_change = ( full_cost_history[-4] - full_cost_val
-                    ) / max(abs(full_cost_history[-4]), 1e-12)
+                rel_change = ( full_cost_history[-2] - full_cost_val
+                    ) / max(abs(full_cost_history[-2]), 1e-12)
                 
                 if num_perturb < 20:
                     stagnated = rel_change > 0 and rel_change < (stop_tol)
                 else:
-                    stagnated = rel_change > 0 and rel_change < (stop_tol/10)
+                    stagnated = rel_change > 0 and rel_change < (stop_tol)
 
                 if stagnated:
                     if routine == "multi-perturb" and num_perturb < 20:
@@ -569,7 +553,7 @@ def get_iGPK(
     # Optional MLE hyperparameter optimization
     # ------------------------------------------------------------
     ObsManager.optimize_hyperparameters(
-        num_iter=200, lr=0.1, opt_noise=True)
+        num_iter=100, lr=0.01, opt_noise=True)
 
     # ------------------------------------------------------------
     # Koopman A, C from full training data
@@ -620,7 +604,7 @@ def get_iGPK(
             Mp_Xplus=Mp_Xplus,
             num_total_samples=None,
         )
-
+    print(f'Num perturbations: {num_perturb}, Final full cost: {post_mle_cost:.6f}')
     # ------------------------------------------------------------
     # Package results
     # ------------------------------------------------------------
@@ -661,10 +645,10 @@ def get_iGPK(
 if __name__ == "__main__":
     import warnings
     warnings.filterwarnings("ignore")
-    SYSTEM_NAME = 'Cart_data'
-    TRAIN_FRAC, TEST_FRAC = 0.6, 0.4
-    CLIP = None
-    LIFTING_ORDER = 35
+    SYSTEM_NAME = 'Lorenz96_8D'
+    TRAIN_FRAC, TEST_FRAC = 0.8, 0.2
+    CLIP = 50
+    LIFTING_ORDER = 50
     NOISE_TYPE = 'gaussian'
     NOISE_INTENSITY = 0.0
     NOISE_SEED = 100
@@ -676,14 +660,14 @@ if __name__ == "__main__":
     DEVICE = "cuda:0"
     SEED_Z = 1234
     SEED_HP = 1234
-    traj_batch_size = 15
+    traj_batch_size = 32
     FULL_COST_EVAL_EVERY = 50
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
     print(f'num_train: {nTrain}, num_test: {nTest}, num_steps: {N}')
 
-    SimData_raw = torch.flip(SimData_raw, dims=[0])
+    # SimData_raw = torch.flip(SimData_raw, dims=[0])
     SimData_clean, mu_vec, std_vec = gpk.normalize_data(
         SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
 
@@ -699,7 +683,7 @@ if __name__ == "__main__":
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 1 * nTrain
+    Ns_gpo = 3 * nTrain
     Dataset['SimData'] = SimData
     Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
@@ -720,9 +704,9 @@ if __name__ == "__main__":
         nTest=nTest,
         lifting_order=LIFTING_ORDER,
         max_iter=MAX_ITER,
-        sgd_lr=1e-3,
-        sgd_m=0.75,
-        stop_tol=1e-5,
+        sgd_lr=1e-2,
+        sgd_m=0.8,
+        stop_tol=1e-4,
         opt_weights=OPT_WEIGHTS,
         routine=ROUTINE,
         train_method=TRAIN_METHOD,

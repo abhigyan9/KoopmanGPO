@@ -772,12 +772,13 @@ def nlpd_per_traj(Xhat:torch.Tensor, Xcv:torch.Tensor, GT:torch.Tensor):
 
 def load_SimData(system_name:str,
                  trainFrac:float, testFrac:float,
-                 clip:int | None = None, normalize:bool=False):
+                 clip:int | None = None, normalize:bool=False,
+                 prefix:str = "Data/DataAuto_") -> tuple:
     """
     Loads and optionally clips and normalizes trajectory data.
     Number of outputs vary if normalize = True.
     """
-    data = torch.load(f"Data/DataAuto_{system_name}.pt", weights_only=True)
+    data = torch.load(f"{prefix}{system_name}.pt", weights_only=True)
     SimData = data["trajectories"]  # Shape: (num_trajectories, state_dim, num_steps)
     ts = data["sample_time"]
     num_trajectories, N = data["num_trajectories"], data["num_steps"]
@@ -802,19 +803,47 @@ def load_SimData(system_name:str,
 
 
 def normalize_data(SimData_raw:torch.Tensor,
-                   nTest:int, nTrain:int, N:int):
+                   nTest:int, nTrain:int, N:int,
+                   mode: str = 'mean-variance') -> tuple:
     """
     Normalizes entire dataset using training set statistics
+    Args:
+    - SimData_raw: (num_trajectories, state_dim, num_steps) tensor of raw trajectories
+    - nTest: number of test trajectories (used to index training set)
+    - nTrain: number of training trajectories (used to index training set)
+    - N: number of time steps to consider for normalization (typically full length)
+    - mode: normalization mode ('mean-variance', 'min-max', 'max-abs')
     """
-    # SimData shape: (num_traj, state_dim, num_steps)
-    mu_vec = SimData_raw[nTest:(nTest+nTrain), :, :N].mean(
-        dim=(0, 2))                                # (n,)
-    std_vec = SimData_raw[nTest:(nTest+nTrain), :, :N].std(
-        dim=(0, 2), unbiased=False).clamp_min(1e-8)  # (n,)
+    if mode == 'mean-variance':
 
-    # Apply normalization to ALL trajectories (train+test)
-    SimData = (SimData_raw - mu_vec.view(1, -1, 1)) / std_vec.view(1, -1, 1)
-    return SimData, mu_vec, std_vec
+        # SimData shape: (num_traj, state_dim, num_steps)
+        offset = SimData_raw[nTest:(nTest+nTrain), :, :N].mean(
+            dim=(0, 2))                                # (n,)
+        scale = SimData_raw[nTest:(nTest+nTrain), :, :N].std(
+            dim=(0, 2), unbiased=False).clamp_min(1e-8)  # (n,)
+
+        # Apply normalization to ALL trajectories (train+test)
+        SimData = (SimData_raw - offset.view(1, -1, 1)) / scale.view(1, -1, 1)
+    elif mode == 'min-max':
+        offset = SimData_raw[nTest:(nTest+nTrain), :, :N].amin(
+            dim=(0, 2))                                # (n,)
+        scale = (SimData_raw[nTest:(nTest+nTrain), :, :N].amax(
+            dim=(0, 2)) - offset).clamp_min(1e-8)  # (n,)
+
+        # Apply normalization to ALL trajectories (train+test)
+        SimData = (SimData_raw - offset.view(1, -1, 1)) / scale.view(1, -1, 1)
+    elif mode == 'max-abs':
+        offset = torch.zeros(SimData_raw.shape[1], device=SimData_raw.device)  # (n,)
+        scale = SimData_raw[nTest:(nTest+nTrain), :, :N].abs().amax(
+            dim=(0, 2)).clamp_min(1e-8)  # (n,)
+
+        # Apply normalization to ALL trajectories (train+test)
+        SimData = SimData_raw / scale.view(1, -1, 1)
+    else:
+        raise ValueError(
+            f"Unsupported normalization mode {mode}.Choose 'mean-variance', 'min-max', or 'max-abs'.")
+
+    return SimData, offset, scale
 
 
 def add_noise(SimData_norm, noise_type="gaussian", intensity=0.05, seed=1111):

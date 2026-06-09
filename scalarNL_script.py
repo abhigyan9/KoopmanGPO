@@ -350,7 +350,7 @@ def run_models_for_noise(
     learn_rate: float = 0.01,
     kernel_hp_scale: list[float | None] = [None, 1.0, None],
     opt_weights: list[float] = [1.0, 1.0, 1.0],
-    routine: str = "Z-only",
+    routine: str = "multi-perturb",
     train_method: str = "Zero-Mean",
     device: str = "cuda:0",
 ):
@@ -366,10 +366,10 @@ def run_models_for_noise(
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
-
+    # SimData_raw = torch.flip(SimData_raw, dims=[0])
     if normalizeData:
         SimData_clean, mu_vec, std_vec = gpk.normalize_data(
-            SimData_raw.to(dtype=torch.float32), nTrain, N)
+            SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
     else:
         SimData_clean = SimData_raw.to(dtype=torch.float32)
 
@@ -380,16 +380,17 @@ def run_models_for_noise(
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 2 * nTrain
+    Ns_gpo = 3 * nTrain
+    
     Dataset['SimData'] = SimData
-    Dataset['X'] = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)],
+    Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
-    Dataset['Xplus'] = torch.cat([SimData[j, :, 1:] for j in range(nTrain)],
+    Dataset['Xplus'] = torch.cat([SimData[nTest+j, :, 1:] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
-    Dataset['ICsetTrain'] = torch.cat([SimData[j, :, 0].view(nx, 1) 
+    Dataset['ICsetTrain'] = torch.cat([SimData[nTest+j, :, 0].view(nx, 1) 
         for j in range(nTrain)], dim=1)
     Dataset['ICsetTest'] = torch.cat([SimData[j, :, 0].view(nx, 1)
-        for j in range(nTrain, nTrain + nTest)], dim=1)
+        for j in range(nTest)], dim=1)
     Dataset['Xtrain'] = gpk.get_kmeans(Dataset['X'], num_centers=Ns_gpo)
     Dataset['dims'] = (nx, N, Ns_gpo)
 
@@ -406,11 +407,11 @@ def run_models_for_noise(
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
         max_iter=max_iter,
-        sgd_lr=learn_rate,sgd_m=0.75, stop_tol=1e-4,
+        sgd_lr=learn_rate,sgd_m=0.8, stop_tol=1e-4,
         opt_weights=opt_weights,
         routine=routine, train_method=train_method,
         hp_scale=kernel_hp_scale, device=device,
-        traj_batch_size=15, full_cost_eval_every=50,
+        traj_batch_size=32, full_cost_eval_every=50,
     )
     t_iGPK = results['history']['opt_time']
 
@@ -440,7 +441,7 @@ def run_models_for_noise(
         SimData=SimData,
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
-        delay=N-1)
+        delay=6)
     t_ssid = time.perf_counter() - t0
 
     # unpack SSID-GPK results
@@ -608,9 +609,9 @@ def run_models_for_noise(
         # included for completeness if this helper is reused on other systems.
         y_labels = None  # ['P(t)', 'Q(t)']
         for (which, idx, split, sim_offset, suffix) in [
-            ("best-train", idx_trainMIN, "train", 0,         "Best_Train"),
-            ("best-test",  idx_testMIN,  "test",  nTrain,    "Best_Test"),
-            ("worst-test", idx_testMAX,  "test",  nTrain,    "Worst_Test"),
+            ("best-train", idx_trainMIN, "train", nTest,         "Best_Train"),
+            ("best-test",  idx_testMIN,  "test",  0,    "Best_Test"),
+            ("worst-test", idx_testMAX,  "test",  0,    "Worst_Test"),
         ]:
             fig, _ = gpk.compare_model_predictions(
                 time=time_arr, models=models, SimData=SimData, idx=idx, N=(
@@ -620,50 +621,29 @@ def run_models_for_noise(
                 y_labels=y_labels)
             _save(fig, outdir, f"{tag}_timeseries_{which}")
 
-            # models_nocv = [
-            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
-            #         "test": {"Xhat": XhatTest}},
-            #     {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
-            #         "test": {"Xhat": XhatTest_poly}},
-            #     {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
-            #         "test": {"Xhat": XhatTest_rbf}},
-            #     {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
-            #         "test": {"Xhat": XhatTest_ssid}},
-            # ]
-            # fig, _ = gpk.compare_model_predictions(
-            #     time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
-            #         SimData.shape[2]-1),
-            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-            #     y_labels=y_labels)
-            # _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
+            models_nocv = [
+                {"name": "iGPK", "train": {"Xhat": XhatTrain},
+                    "test": {"Xhat": XhatTest}},
+                {"name": "Poly-eDMD", "train": {"Xhat": XhatTrain_poly},
+                    "test": {"Xhat": XhatTest_poly}},
+                {"name": "RBF-eDMD",  "train": {"Xhat": XhatTrain_rbf},
+                    "test": {"Xhat": XhatTest_rbf}},
+                {"name": "SSID-GPK", "train": {"Xhat": XhatTrain_ssid},
+                    "test": {"Xhat": XhatTest_ssid}},
+            ]
+            fig, _ = gpk.compare_model_predictions(
+                time=time_arr, models=models_nocv, SimData=SimData, idx=idx, N=(
+                    SimData.shape[2]-1),
+                system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
+                compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
+                y_labels=y_labels)
+            _save(fig, outdir, f"{tag}_timeseries_NoCV_{which}")
 
-            # models_iGPK = [
-            #     {"name": "iGPK", "train": {"Xhat": XhatTrain, "Xcvhat": XcvhatTrain},
-            #         "test": {"Xhat": XhatTest, "Xcvhat": XcvhatTest}}]
-            # fig, _ = gpk.compare_model_predictions(
-            #     time=time_arr, models=models_iGPK, SimData=SimData, idx=idx, N=(
-            #         SimData.shape[2]-1),
-            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-            #     y_labels=y_labels)
-            # _save(fig, outdir, f"{tag}_timeseries_igpkONLY_{which}")
-
-            # models_iGPK_noCV = [
-            #     {"name": "iGPK", "train": {"Xhat": XhatTrain},
-            #         "test": {"Xhat": XhatTest}}]
-            # fig, _ = gpk.compare_model_predictions(
-            #     time=time_arr, models=models_iGPK_noCV, SimData=SimData, idx=idx, N=(
-            #         SimData.shape[2]-1),
-            #     system_name=system_name, title_suffix=suffix, split=split, sim_offset=sim_offset,
-            #     compare_to="SimData_clean", SimData_clean=SimData_clean, sigma=1.0, skip_title=True,
-            #     y_labels=y_labels)
-            # _save(fig, outdir, f"{tag}_timeseries_igpk_noCV_{which}")
 
         train_int_coverage = compute_interval_coverage(
-            XhatTrain, XcvhatTrain, SimData, sim_offset=0)
+            XhatTrain, XcvhatTrain, SimData, sim_offset=nTest)
         test_int_coverage = compute_interval_coverage(
-            XhatTest,  XcvhatTest,  SimData, sim_offset=nTrain)
+            XhatTest,  XcvhatTest,  SimData, sim_offset=0)
 
         print("Train coverage (per state):")
         for alpha, vals in train_int_coverage.items():
@@ -676,17 +656,17 @@ def run_models_for_noise(
 
         # iGPK
         a_tr_i, emp_tr_i = coverage_curve(
-            XhatTrain, XcvhatTrain, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
+            XhatTrain, XcvhatTrain, SimData, sim_offset=nTest,      alphas=alphas, reduce="mean")
         a_te_i, emp_te_i = coverage_curve(
-            XhatTest,  XcvhatTest,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
+            XhatTest,  XcvhatTest,  SimData, sim_offset=0, alphas=alphas, reduce="mean")
         print(
             f"iGPK miscalibration area : TRAIN: {miscalibration_area(a_tr_i, emp_tr_i).item():.2e} || TEST: {miscalibration_area(a_te_i, emp_te_i).item():.2e}")
 
         # SSID-GPK
         a_tr_s, emp_tr_s = coverage_curve(
-            XhatTrain_ssid, XcvhatTrain_ssid, SimData, sim_offset=0,      alphas=alphas, reduce="mean")
+            XhatTrain_ssid, XcvhatTrain_ssid, SimData, sim_offset=nTest,      alphas=alphas, reduce="mean")
         a_te_s, emp_te_s = coverage_curve(
-            XhatTest_ssid,  XcvhatTest_ssid,  SimData, sim_offset=nTrain, alphas=alphas, reduce="mean")
+            XhatTest_ssid,  XcvhatTest_ssid,  SimData, sim_offset=0, alphas=alphas, reduce="mean")
         print(
             f"SSID-GPK miscalibration area : TRAIN: {miscalibration_area(a_tr_s, emp_tr_s).item():.2e} || TEST: {miscalibration_area(a_te_s, emp_te_s).item():.2e}")
 
@@ -710,15 +690,15 @@ def run_models_for_noise(
 
         # ==== NEW: NLPD for iGPK & SSID-GPK (Train/Test) + plots & summary ====
         # Ground-truth slices
-        GT_train = SimData[0:nTrain, :, :N-1]         # (nTrain, n, N)
-        GT_test = SimData[nTrain:nTrain+nTest, :, :N-1]  # (nTest, n, N)
+        # GT_train = SimData[0:nTrain, :, :N-1]         # (nTrain, n, N)
+        GT_test = SimData[:nTest, :, :N-1]  # (nTest, n, N)
 
         # Per-trajectory NLPD statistics (mean ± std across trajectories)
         # nlpd_traj_train_igpk = _nlpd_per_traj(XhatTrain[:,:,:N-1],      XcvhatTrain[:,:,:,:N-1],      GT_train).detach().cpu()
-        nlpd_traj_test_igpk = _nlpd_per_traj(
+        nlpd_traj_test_igpk = gpk.nlpd_per_traj(
             XhatTest[:, :, :N-1],       XcvhatTest[:, :, :, :N-1],       GT_test).detach().cpu()
         # nlpd_traj_train_ssid = _nlpd_per_traj(XhatTrain_ssid[:,:,:N-1], XcvhatTrain_ssid[:,:,:,:N-1], GT_train).detach().cpu()
-        nlpd_traj_test_ssid = _nlpd_per_traj(
+        nlpd_traj_test_ssid = gpk.nlpd_per_traj(
             XhatTest_ssid[:, :, :N-1],  XcvhatTest_ssid[:, :, :, :N-1],  GT_test).detach().cpu()
 
         # Print summary

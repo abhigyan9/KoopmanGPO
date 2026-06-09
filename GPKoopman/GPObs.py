@@ -722,7 +722,7 @@ def getKoopman(manager: GPObservablesManager,
     try:
         L = torch.linalg.cholesky(M @ M.mT +
                 (1e-8) * torch.eye(nz, device=M.device))
-        M_pinv = torch.cholesky_solve(M.mT, L)
+        M_pinv = torch.cholesky_solve(M, L).mT
     except RuntimeError:
         M_pinv = torch.linalg.pinv(M)
     

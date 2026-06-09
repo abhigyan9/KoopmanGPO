@@ -71,14 +71,14 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
     SimData = SimData.float()
     n, N = SimData.shape[1], SimData.shape[2] - 1
 
-    X = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)],
+    X = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                   dim=1)       # Concatenated Data matrix
     # Time-shifted Data matrix
-    Xplus = torch.cat([SimData[j, :, 1:] for j in range(nTrain)], dim=1)
-    ICsetTrain = torch.cat([SimData[j, :, 0].view(n, 1)
+    Xplus = torch.cat([SimData[nTest+j, :, 1:] for j in range(nTrain)], dim=1)
+    ICsetTrain = torch.cat([SimData[nTest+j, :, 0].view(n, 1)
                            for j in range(nTrain)], dim=1)
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
-                          for j in range(nTrain, nTrain + nTest)], dim=1)
+                          for j in range(nTest)], dim=1)
 
     # Generate Polynomial Basis Function
     def phi_batch(X): return generate_basis_batch(X, poly_deg)
@@ -103,10 +103,10 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
             ZedTrain[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None
         )
 
-        errors = XedTrain[j] - SimData[j, :, :N]
+        errors = XedTrain[j] - SimData[nTest+j, :, :N]
         rmse = torch.sqrt(torch.mean(errors**2, dim=1))
 
-        true_vals = SimData[j, :, :N]
+        true_vals = SimData[nTest+j, :, :N]
         range_vals = true_vals.max(dim=1).values - true_vals.min(dim=1).values
         range_vals = torch.where(
             range_vals == 0, torch.ones_like(range_vals), range_vals)
@@ -124,10 +124,10 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
             ZedTest[j, :, 0], A_edmd, C_edmd, num_steps=N, ts=None, x0cv=None
         )
 
-        errors = XedTest[j] - SimData[nTrain+j, :, :N]
+        errors = XedTest[j] - SimData[j, :, :N]
         rmse = torch.sqrt(torch.mean(errors**2, dim=1))
 
-        true_vals = SimData[nTrain+j, :, :N]
+        true_vals = SimData[j, :, :N]
         range_vals = true_vals.max(dim=1).values - true_vals.min(dim=1).values
         range_vals = torch.where(
             range_vals == 0, torch.ones_like(range_vals), range_vals)
@@ -227,20 +227,20 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
         C_edmd (torch.Tensor): The reconstruction matrix from the lifted space to the state space.
         XedTrain (torch.Tensor): Predicted training trajectories.
         XedTest (torch.Tensor): Predicted testing trajectories.
-        TrainRMSE_eDMD (torch.Tensor): RMSE for each state in each training trajectory.
-        TestRMSE_eDMD (torch.Tensor): RMSE for each state in each testing trajectory.
+        TrainNRMSE_eDMD (torch.Tensor): NRMSE for each state in each training trajectory.
+        TestNRMSE_eDMD (torch.Tensor): NRMSE for each state in each testing trajectory.
     """
     SimData = SimData.float()
     n, N = SimData.shape[1], SimData.shape[2] - 1
 
     # Concatenate data for training: X and its time-shifted version Xplus.
-    X = torch.cat([SimData[j, :, 0:N] for j in range(nTrain)], dim=1)
-    Xplus = torch.cat([SimData[j, :, 1:] for j in range(nTrain)], dim=1)
+    X = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)], dim=1)
+    Xplus = torch.cat([SimData[nTest+j, :, 1:] for j in range(nTrain)], dim=1)
     # Initial conditions for training and testing.
-    ICsetTrain = torch.cat([SimData[j, :, 0].view(n, 1)
+    ICsetTrain = torch.cat([SimData[nTest+j, :, 0].view(n, 1)
                            for j in range(nTrain)], dim=1)
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
-                          for j in range(nTrain, nTrain + nTest)], dim=1)
+                          for j in range(nTest)], dim=1)
 
     centers = get_kmeans(X, num_centers)
 
@@ -262,7 +262,7 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
     # Evaluate on the training set.
     ZedTrain = torch.zeros((nTrain, p, N))
     XedTrain = torch.zeros((nTrain, n, N))
-    TrainRMSE_eDMD = torch.zeros((nTrain, n))
+    TrainNRMSE_eDMD = torch.zeros((nTrain, n))
 
     for j in range(nTrain):
         # Lift the initial condition for the j-th training trajectory.
@@ -271,28 +271,35 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
         # Simulate the lifted linear system.
         ZedTrain[j, :, :], XedTrain[j, :, :] = sim_LTI(ZedTrain[j, :, 0], A_edmd, C_edmd,
                                                        num_steps=N, ts=None, x0cv=None)
-        # Compute RMSE on the j-th trajectory.
-        TrainRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
-            (XedTrain[j, :, :] - SimData[j, :, :N])**2, dim=1))
+        true_vals = SimData[nTest+j, :, :N]
+        errors = XedTrain[j, :, :] - true_vals
+        rmse = torch.sqrt(torch.mean(errors**2, dim=1))
+        range_vals = torch.max(true_vals, dim=1).values - torch.min(true_vals, dim=1).values
+        range_vals = torch.where(range_vals == 0, torch.ones_like(range_vals), range_vals)
+        TrainNRMSE_eDMD[j, :] = rmse / range_vals
 
     # Evaluate on the test set.
     ZedTest = torch.zeros((nTest, p, N))
     XedTest = torch.zeros((nTest, n, N))
-    TestRMSE_eDMD = torch.zeros((nTest, n))
+    TestNRMSE_eDMD = torch.zeros((nTest, n))
 
     for j in range(nTest):
         ZedTest[j, :, 0] = rbf_observable(ICsetTest[:, j].view(
             n, 1), centers, width, rbf_type, state_aug).view(p,)
         ZedTest[j, :, :], XedTest[j, :, :] = sim_LTI(ZedTest[j, :, 0], A_edmd, C_edmd,
                                                      num_steps=N, ts=None, x0cv=None)
-        TestRMSE_eDMD[j, :] = torch.sqrt(torch.mean(
-            (XedTest[j, :, :] - SimData[nTrain+j, :, :N])**2, dim=1))
+        true_vals = SimData[j, :, :N]
+        errors = XedTest[j, :, :] - true_vals
+        rmse = torch.sqrt(torch.mean(errors**2, dim=1))
+        range_vals = torch.max(true_vals, dim=1).values - torch.min(true_vals, dim=1).values
+        range_vals = torch.where(range_vals == 0, torch.ones_like(range_vals), range_vals)
+        TestNRMSE_eDMD[j, :] = rmse / range_vals
 
     # Detach results.
     XedTrain, XedTest = XedTrain.detach(), XedTest.detach()
-    TrainRMSE_eDMD, TestRMSE_eDMD = TrainRMSE_eDMD.detach(), TestRMSE_eDMD.detach()
+    TrainNRMSE_eDMD, TestNRMSE_eDMD = TrainNRMSE_eDMD.detach(), TestNRMSE_eDMD.detach()
 
-    return A_edmd, C_edmd, XedTrain, XedTest, TrainRMSE_eDMD, TestRMSE_eDMD
+    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD
 
 
 # Subspace Identification driven GP-Koopman
@@ -572,13 +579,13 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
 
     # Data Preparation
     n, N = SimData.shape[1], SimData.shape[2]
-    ssid_Y = SimData[:nTrain, :, :]
+    ssid_Y = SimData[nTest:nTest+nTrain, :, :]
     ssid_U = torch.zeros(
         (nTrain, 1, N), dtype=ssid_Y.dtype, device=ssid_Y.device)
-    ICsetTrain = torch.cat([SimData[j, :, 0].view(n, 1)
+    ICsetTrain = torch.cat([SimData[nTest+j, :, 0].view(n, 1)
                            for j in range(nTrain)], dim=1)
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
-                          for j in range(nTrain, nTrain + nTest)], dim=1)
+                          for j in range(nTest)], dim=1)
 
     # Multi-Trajectory Subspace Identification
     A, B, C, D, z0_lift = SSID(
@@ -589,19 +596,19 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
     for i in range(lifting_order):
         ObsManager.add_observable(
             index=i, d=C.shape[0], Ns=z0_lift.shape[1], 
-            kernel=GaussianKernel(), noise=1e-6, device='cpu',
+            kernel=GaussianKernel(), noise=1e-4, device='cpu',
         )
     ObsManager.set_random_hyperparameters(scale=[1., 1., None])
     for i in range(lifting_order):
         ObsManager.train_observable(i, ssid_Y[:, :, 0].mT, z0_lift[i, :].unsqueeze(dim=1))
 
-    ObsManager.optimize_hyperparameters(num_iter=200, lr=0.1, opt_noise=True)
+    ObsManager.optimize_hyperparameters(num_iter=100, lr=0.01, opt_noise=True)
 
     # Trajectory Simulation and Model Evaluation
     XhatTrain, XcvTrain, TrainNRMSE = sim_and_eval(
-        ObsManager, A, C, ICsetTrain, SimData, traj_offset=0)
+        ObsManager, A, C, ICsetTrain, SimData, traj_offset=nTest)
     XhatTest,  XcvTest,  TestNRMSE = sim_and_eval(
-        ObsManager, A, C, ICsetTest,  SimData, traj_offset=nTrain)
+        ObsManager, A, C, ICsetTest,  SimData, traj_offset=0)
 
     return {
         "ObsManager": ObsManager,

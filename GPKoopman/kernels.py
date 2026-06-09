@@ -372,7 +372,7 @@ class ExpSineSqrKernel(TwoPositiveParameterKernel):
         dists = _pairwise_dist(X1, X2)
 
         sine_term = torch.sin(
-            torch.pi * dists / self.period
+            torch.pi * dists / (self.hp2 ** 2)
         ) ** 2
 
         return (self.hp1 ** 2) * torch.exp(

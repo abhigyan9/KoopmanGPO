@@ -64,7 +64,7 @@ TRAIN_FRAC = float(args.train_frac)
 DIRECTORY = args.directory
 
 TEST_FRAC = 1 - TRAIN_FRAC
-CLIP = None
+CLIP = 50
 NORMALIZE_DATA = True
 
 SEEDS = [100]
@@ -72,16 +72,16 @@ stamp = datetime.now().strftime("%Y%m%d")
 OUTDIR = DIRECTORY + SYSTEM_NAME + f'_{LIFTED_ORDER}D-' + stamp
 os.makedirs(OUTDIR, exist_ok=True)
 # Find Scale of Hyperparameter Initialization
-SimData_raw, _, _, N, nTrain, _ = gpk.load_SimData(
+SimData_raw, _, _, N, nTrain, nTest = gpk.load_SimData(
     SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
-
+# SimData_raw = torch.flip(SimData_raw, dims=[0])
 if NORMALIZE_DATA:
-    SimData, _, _ = gpk.normalize_data(
-        SimData_raw, nTrain, N)
+    SimData_clean, _, _ = gpk.normalize_data(
+        SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
 else:
     SimData_clean = SimData_raw
 
-hp_scale = gpk.find_hp_init(SimData, nTrain)
+hp_scale = gpk.find_hp_init(SimData_clean[nTest:nTest+nTrain, :, :-1])
 print(f'Found heuristic Lengthscale: {hp_scale}')
 
 # -------------------------------------------------
