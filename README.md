@@ -45,8 +45,13 @@ git clone https://github.com/abhigyan9/KoopmanGPO.git
 
 Create and activate a Python 3.12 virtual environemnt
 ```
-python -3.12 -m venv .gpk312
-.\gkp312\Scripts\Activate.ps1
+py -3.12 -m venv .gpk312
+.\.gpk312\Scripts\Activate.ps1
+```
+Switch to the refactor-gpobs branch\
+NOTE:(readme and command-line installation are not available in the main branch)
+```
+git switch refactor-gpobs
 ```
 
 Install the GPKoopman package with extra identifier for CUDA Support

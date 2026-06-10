@@ -30,5 +30,5 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(include=["GPKoopman", "GPKoopman.*"]),
     install_requires=read_requirements(),
-    python_requires="==3.12",
+    python_requires=">=3.12",
 )
