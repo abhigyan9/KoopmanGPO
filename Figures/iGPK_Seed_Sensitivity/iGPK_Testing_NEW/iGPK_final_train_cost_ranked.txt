@@ -1,2 +1,0 @@
-tag	final_train_cost	A_path
-run-1_zs-3_hps-1	4.157415e+01	None
