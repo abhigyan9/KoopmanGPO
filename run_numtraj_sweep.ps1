@@ -32,7 +32,7 @@ $OPT_W3 = Get-Setting 'OPT_W3' '0.0'
 $SEED_Z = Get-Setting 'SEED_Z' '1234'
 $SEED_HP = Get-Setting 'SEED_HP' '1234'
 $SLEEP_BETWEEN_RUNS = Get-Setting 'SLEEP_BETWEEN_RUNS' '10'
-$TRAJ_LIST_RAW = Get-Setting 'TRAJ_LIST' '20 40 60 80 100 125 150 200 250 300 400'
+$TRAJ_LIST_RAW = Get-Setting 'TRAJ_LIST' '20 60 100 150 200 250 300 400 500'
 $FAIL_FAST = Get-Setting 'FAIL_FAST' '0'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path

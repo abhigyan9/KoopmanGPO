@@ -16,10 +16,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Edit these lists to define the grid.
-$LearnRates = @(0.01, 0.002, 0.001)
+$LearnRates = @(0.1, 0.02, 0.01, 0.002, 0.001)
 $Momentums = @(0.7, 0.75, 0.8)
-$StopTols = @(1e-3)
-$TrajBatchSizes = @(32, 40)
+$StopTols = @(1e-4 , 1e-3)
+$TrajBatchSizes = @(16, 20)
 
 $Root = $PSScriptRoot
 $OutDir = Join-Path $Root "Figures\GridSearch\${SystemName}_${DateStamp}"

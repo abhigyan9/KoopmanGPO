@@ -689,8 +689,8 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
     N = SimData_ref.shape[2] - 1
     p = A.shape[0]
 
-    Zmean = torch.zeros((nTraj, p, N), dtype=ICset.dtype, device=ICset.device)
-    Zcv = torch.zeros((nTraj, p, p, N), dtype=ICset.dtype, device=ICset.device)
+    Zmean = torch.zeros((p, 1), dtype=ICset.dtype, device=ICset.device)
+    Zcv = torch.zeros((p, p, 1), dtype=ICset.dtype, device=ICset.device)
     Xhat = torch.zeros((nTraj, n, N), dtype=ICset.dtype, device=ICset.device)
     Xcv = torch.zeros((nTraj, n, n, N), dtype=ICset.dtype, device=ICset.device)
     NRMSE = torch.zeros((nTraj, n), dtype=ICset.dtype, device=ICset.device)
@@ -698,20 +698,20 @@ def sim_and_eval(ObsManager, A, C, ICset, SimData_ref, traj_offset: int = 0):
     for j in range(nTraj):
         # 1) Predict initial lifted state distribution from IC
         for i in range(p):
-            Zmean[j, i, 0] = ObsManager.predict_mean(i, ICset[:, j].view(n, 1))
-            Zcv[j, i, i, 0] = ObsManager.predict_covariance(
+            Zmean[i, 0] = ObsManager.predict_mean(i, ICset[:, j].view(n, 1))
+            Zcv[i, i, 0] = ObsManager.predict_covariance(
                 i, ICset[:, j].view(n, 1)).clamp(min=1e-8, max=1e8)
-            if torch.isnan(Zcv[j, i, i, 0]).any():
+            if torch.isnan(Zcv[i, i, 0]).any():
                 warnings.warn(f"GPO-{i} produced NaN lifted cov for {j}-th trajectory", RuntimeWarning)
-            if Zcv[j, i, i, 0] > 1e20:
-                warnings.warn(f"GPO-{i} produced lifted cov > 1e20 for {j}-th trajectory")
+            # if Zcv[i, i, 0] > 1e20:
+            #     warnings.warn(f"GPO-{i} produced lifted cov > 1e20 for {j}-th trajectory")
 
         # 2) Propagate with linear model
-        Zmean[j], Zcv[j], Xhat[j], Xcv[j] = sim_LTI(
-            Zmean[j, :, 0].view(p, 1), A, C, num_steps=N, ts=None, x0cv=Zcv[j, :, :, 0]
+        _, _, Xhat[j], Xcv[j] = sim_LTI(
+            Zmean[:, 0].view(p, 1), A, C, num_steps=N, ts=None, x0cv=Zcv[:, :, 0]
         )
-        if torch.isnan(Zcv).any():
-            warnings.warn(f"sim_LTI produced NaN lifted covariance for {j}-trajectory", UserWarning)
+        # if torch.isnan(Zcv).any():
+        #     warnings.warn(f"sim_LTI produced NaN lifted covariance for {j}-trajectory", UserWarning)
         # 3) NRMSE against reference (per-trajectory range)
         y_true = SimData_ref[traj_offset + j, :, :N]  # (n, N)
         errors = Xhat[j] - y_true

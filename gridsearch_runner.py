@@ -20,9 +20,9 @@ warnings.filterwarnings("ignore")
 # Default experiment configuration
 # -----------------------------
 SYSTEM_NAME = "Inhibited Predator-Prey"
-TRAIN_FRAC = 0.80
+TRAIN_FRAC = 0.40
 TEST_FRAC = 1.0 - TRAIN_FRAC
-CLIP = 50
+CLIP = None
 
 NORMALIZE_DATA = True
 NOISE_TYPE = "gaussian"
@@ -35,7 +35,7 @@ DEVICE = "cuda:0"
 
 FULL_COST_EVAL_EVERY = 50
 OPT_WEIGHTS = [1.0, 1.0, 0.0]
-ROUTINE = "multi-perturb"  # OR "multi-perturb"
+ROUTINE = "standard"  # OR "multi-perturb"
 TRAIN_METHOD = "Zero-Mean"
 
 SEED_Z = 1234
@@ -118,7 +118,7 @@ def clean_json_value(value):
 
 
 def build_dataset(args):
-    sim_data_raw, ts, num_traj, n_steps, n_train, n_test = gpk.load_SimData(
+    sim_data, ts, num_traj, n_steps, n_train, n_test = gpk.load_SimData(
         args.system_name,
         args.train_frac,
         1.0 - args.train_frac,
@@ -126,29 +126,23 @@ def build_dataset(args):
     )
 
     if NORMALIZE_DATA:
-        sim_data_clean, mu_vec, std_vec = gpk.normalize_data(
-            sim_data_raw.to(dtype=torch.float32),
+        sim_data, _, _ = gpk.normalize_data(
+            sim_data.to(dtype=torch.float32),
             n_test,
             n_train,
             n_steps,
+            mode='mean-variance',
         )
     else:
-        sim_data_clean = sim_data_raw
+        sim_data = sim_data
 
-    hp2_scale = gpk.find_hp_init(sim_data_clean[n_test:n_test + n_train, :, :-1])
+    hp2_scale = gpk.find_hp_init(sim_data[n_test:n_test + n_train, :, :-1])
     hp_scale = [None, hp2_scale, None]
-
-    sim_data = gpk.add_noise(
-        sim_data_clean,
-        noise_type=NOISE_TYPE,
-        intensity=NOISE_INTENSITY,
-        seed=NOISE_SEED,
-    )
 
     dataset = {}
     nx = sim_data.shape[1]
     n_steps = sim_data.shape[2] - 1
-    ns_gpo = 3 * n_train
+    ns_gpo = 1 * n_train
 
     dataset["SimData"] = sim_data
     dataset["X"] = torch.cat(
@@ -182,11 +176,11 @@ def build_dataset(args):
         "hp2_scale": to_float(hp2_scale),
     }
 
-    return dataset, sim_data_clean, hp_scale, metadata
+    return dataset, sim_data, hp_scale, metadata
 
 
 def run_single_combo(args, out_path):
-    dataset, sim_data_clean, hp_scale, metadata = build_dataset(args)
+    dataset, sim_data, hp_scale, metadata = build_dataset(args)
 
     n_train = metadata["n_train"]
     n_test = metadata["n_test"]
@@ -230,13 +224,13 @@ def run_single_combo(args, out_path):
     train_nlpd = gpk.nlpd_per_traj(
         results["Train"]["Xhat"][:, :, :n_steps - 1],
         results["Train"]["Xcv"][:, :, :, :n_steps - 1],
-        sim_data_clean[n_test:n_test + n_train, :, :n_steps - 1],
+        sim_data[n_test:n_test + n_train, :, :n_steps - 1],
     )
 
     test_nlpd = gpk.nlpd_per_traj(
         results["Test"]["Xhat"][:, :, :n_steps - 1],
         results["Test"]["Xcv"][:, :, :, :n_steps - 1],
-        sim_data_clean[:n_test, :, :n_steps - 1],
+        sim_data[:n_test, :, :n_steps - 1],
     )
 
     row = {

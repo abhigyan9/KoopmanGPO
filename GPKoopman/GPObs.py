@@ -142,6 +142,28 @@ class GPObservable(nn.Module):
 
         self.alpha = self.invKxx @ (self.ytrain - self.prior_mean(self.Xtrain))
 
+    def predict_G(self, Xq : torch.Tensor) -> torch.Tensor:
+        """
+        Compute the kernel covariance matrix at given query point(s)
+        """
+        Xq = Xq.to(device=self.device, dtype=self.dtype)    # (d, Nq)
+
+        Kxx = self.kernel(self.Xtrain, self.Xtrain) # (Ns, Ns)
+        Kqx = self.kernel(Xq, self.Xtrain)  # (Nq, Ns)
+
+        try:
+            L = torch.linalg.cholesky(Kxx + 
+                    (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device))
+            invKxx = torch.cholesky_inverse(L)
+        except RuntimeError:
+            invKxx = torch.linalg.pinv((Kxx + 
+                        (self.noise ** 2) * torch.eye(self.Ns, dtype=self.dtype, device=self.device)), 
+                        hermitian=True)
+            warnings.warn(f"Cholesky failed in predict_G. Used linalg.pinv with hermitian=True", RuntimeWarning)
+
+        G = Kqx @ invKxx    # (Nq, Ns)
+        return G
+
     def predictMean(self, Xq : torch.Tensor) -> torch.Tensor:
         Xq = Xq.to(dtype=self.dtype, device=self.device)
 
@@ -259,7 +281,7 @@ class GPObservable(nn.Module):
             warnings.warn(f"Cholesky failed in forward_G. Used linalg.pinv with hermitian=True", RuntimeWarning)
 
         G = Kqx @ invKxx    # (Nq, Ns)
-        return G
+        return G.clamp(min=1e-4)
 
     def optimize_hyperparameters(
             self, num_iter : int = 100, 

@@ -30,6 +30,24 @@ def generate_monomial_powers(nx: int, total_orders=(2, 3)):
 
 
 @torch.no_grad()
+def _get_cached_invKxx(obs):
+    """Return the GP inverse covariance cache, computing it if needed."""
+    if obs.invKxx is not None:
+        return obs.invKxx
+
+    Kxx = obs.kernel(obs.Xtrain, obs.Xtrain)
+    K_til = Kxx + (obs.noise ** 2) * torch.eye(
+        obs.Ns, dtype=obs.dtype, device=obs.device)
+
+    try:
+        obs.invKxx = torch.cholesky_inverse(torch.linalg.cholesky(K_til))
+    except RuntimeError:
+        obs.invKxx = torch.linalg.pinv(K_til, hermitian=True)
+
+    return obs.invKxx
+
+
+@torch.no_grad()
 def build_G_cache(manager, X, Xplus) -> tuple[torch.Tensor]:
     """
     Build detached G caches for Z-only optimization.
@@ -52,9 +70,12 @@ def build_G_cache(manager, X, Xplus) -> tuple[torch.Tensor]:
 
     for i in range(nz):
         obs = manager.observables[i]
+        X_i = X.to(device=obs.device, dtype=obs.dtype)
+        Xplus_i = Xplus.to(device=obs.device, dtype=obs.dtype)
+        invKxx = _get_cached_invKxx(obs)
 
-        Gi = obs.forward_G(X)       # X : (nx, N*nT) -> Gi : (N*nT, r)
-        Gpi = obs.forward_G(Xplus)  # (N*nT, r)
+        Gi = obs.kernel(X_i, obs.Xtrain) @ invKxx       # (N*nT, r)
+        Gpi = obs.kernel(Xplus_i, obs.Xtrain) @ invKxx  # (N*nT, r)
 
         G_X_list.append(Gi)
         G_Xplus_list.append(Gpi)
@@ -142,6 +163,96 @@ def get_cost_simple_fast(
     return ((lambda1 * cost1) + (lambda2 * cost2)) / (nz * Ns)
 
 
+@torch.no_grad()
+def get_full_cost_streamed(
+    Z, X, Xplus, manager,
+    lambda1=1.0, lambda2=1.0, lambda3=1.0,
+    jitter=1e-6,
+    Mp_X0=None, Mp_X=None, Mp_Xplus=None,
+    chunk_size: int = 8192,
+):
+    """Exact full-batch cost without materializing full G_X/G_Xplus caches."""
+    nz = Z.shape[1]
+    Ns = Z.shape[0]
+    dtype = Z.dtype
+    device = Z.device
+
+    X = X.to(device=device, dtype=dtype)
+    Xplus = Xplus.to(device=device, dtype=dtype)
+
+    if Mp_X0 is not None:
+        Mp_X0 = Mp_X0.to(device=device, dtype=dtype)
+        Mp_X = Mp_X.to(device=device, dtype=dtype)
+        Mp_Xplus = Mp_Xplus.to(device=device, dtype=dtype)
+
+    S = X.shape[1]
+    chunk_size = int(min(max(1, chunk_size), S))
+    lifted_residual = Z - Mp_X0 if Mp_X0 is not None else Z
+
+    alphas = []
+    for i in range(nz):
+        obs = manager.observables[i]
+        invKxx = _get_cached_invKxx(obs).to(device=device, dtype=dtype)
+        alphas.append(invKxx @ lifted_residual[:, i:i+1])
+
+    Gram = torch.zeros((nz, nz), dtype=dtype, device=device)
+    BMt1 = torch.zeros((nz, nz), dtype=dtype, device=device)
+    BMt2 = torch.zeros((X.shape[0], nz), dtype=dtype, device=device)
+    B1_norm_sq = torch.zeros((), dtype=dtype, device=device)
+    B2_norm_sq = torch.zeros((), dtype=dtype, device=device)
+
+    for start in range(0, S, chunk_size):
+        stop = min(start + chunk_size, S)
+        X_c = X[:, start:stop]
+        Xplus_c = Xplus[:, start:stop]
+
+        M_rows = []
+        Mplus_rows = []
+        for i, alpha_i in enumerate(alphas):
+            obs = manager.observables[i]
+            M_i = (obs.kernel(X_c, obs.Xtrain) @ alpha_i).mT
+            Mplus_i = (obs.kernel(Xplus_c, obs.Xtrain) @ alpha_i).mT
+
+            if Mp_X0 is not None:
+                M_i = Mp_X[i:i+1, start:stop] + M_i
+                Mplus_i = Mp_Xplus[i:i+1, start:stop] + Mplus_i
+
+            M_rows.append(M_i)
+            Mplus_rows.append(Mplus_i)
+
+        M = torch.cat(M_rows, dim=0)
+        Mplus = torch.cat(Mplus_rows, dim=0)
+
+        Gram += M @ M.mT
+        BMt1 += Mplus @ M.mT
+        BMt2 += X_c @ M.mT
+        B1_norm_sq += torch.sum(Mplus * Mplus)
+        B2_norm_sq += torch.sum(X_c * X_c)
+
+    eye_p = torch.eye(nz, dtype=dtype, device=device)
+
+    try:
+        L = torch.linalg.cholesky(Gram + jitter * eye_p)
+    except RuntimeError:
+        try:
+            L = torch.linalg.cholesky(Gram + (10 * jitter) * eye_p)
+        except RuntimeError:
+            L = torch.linalg.cholesky(Gram + (100 * jitter) * eye_p)
+
+    coeff1 = torch.cholesky_solve(BMt1.mT, L).mT
+    coeff2 = torch.cholesky_solve(BMt2.mT, L).mT
+
+    def _residual_norm_sq(B_norm_sq, BMt, coeff):
+        val = B_norm_sq - 2.0 * torch.sum(BMt * coeff)
+        val = val + torch.sum((coeff @ Gram) * coeff)
+        return torch.clamp(val, min=0.0)
+
+    cost1 = torch.sqrt(_residual_norm_sq(B1_norm_sq, BMt1, coeff1))
+    cost2 = torch.sqrt(_residual_norm_sq(B2_norm_sq, BMt2, coeff2))
+
+    return ((lambda1 * cost1) + (lambda2 * cost2)) / (nz * Ns)
+
+
 def print_obs_fingerprint(ObsManager, tag, max_obs=5):
     print(f"\n===== OBS FINGERPRINT: {tag} =====")
     for i in range(min(max_obs, ObsManager.num_obs)):
@@ -225,7 +336,7 @@ def get_iGPK(
         torch.manual_seed(seed=seed_z)
 
         Z_raw = torch.zeros((Ns_gpo, nz))
-        monomial_powers = generate_monomial_powers(nx, total_orders=(1,))
+        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2,3))
         num_monomial_means = min(nz, len(monomial_powers))
 
         for i in range(nz):
@@ -245,11 +356,11 @@ def get_iGPK(
                 Ns=Ns_gpo,
                 kernel=kernel,
                 prior_mean=None,
-                noise=1e-4,
+                noise=1e-6,
                 device=device,
                 beta=20.0,
                 thresh=20.0,
-                eps=1e-8,
+                eps=1e-12,
             )
 
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
@@ -304,15 +415,8 @@ def get_iGPK(
     full_cost_history = []
     grad_history = []
 
-    # Build full GP smoother caches once, using the initial GP hyperparameters.
-    # Mini-batches slice these cached tensors.
-    G_X, G_Xplus = build_G_cache(ObsManager, X, Xplus)
-
     X_dev = X.to(device=device)
     Xplus_dev = Xplus.to(device=device)
-
-    G_X = G_X.to(device=device)
-    G_Xplus = G_Xplus.to(device=device)
 
     num_total_samples = X_dev.shape[1]  # N * Ns_gpo
 
@@ -387,11 +491,11 @@ def get_iGPK(
     def _full_cost_() -> float:
         """Evaluate the full training cost at the current Z."""
         with torch.no_grad():
-            full_cost = get_cost_simple_fast(
-                Z, X_dev, G_X, G_Xplus,
+            full_cost = get_full_cost_streamed(
+                Z, X_dev, Xplus_dev, ObsManager,
                 lambda1=lam1, lambda2=lam2, lambda3=lam3,
                 Mp_X0=Mp_X0, Mp_X=Mp_X, Mp_Xplus=Mp_Xplus,
-                num_total_samples=None)
+                chunk_size=N * traj_batch_size)
 
         return float(full_cost.item())
     # ------------------------------------------------------------
@@ -426,8 +530,8 @@ def get_iGPK(
         batch_cols = _trajectory_batch_columns(traj_idx)
 
         X_b = X_dev[:, batch_cols]
-        G_X_b = G_X[:, batch_cols, :]
-        G_Xplus_b = G_Xplus[:, batch_cols, :]
+        Xplus_b = Xplus_dev[:, batch_cols]
+        G_X_b, G_Xplus_b = build_G_cache(ObsManager, X_b, Xplus_b)
 
         if train_method == "Monomials":
             Mp_X_b = Mp_X[:, batch_cols]
@@ -553,7 +657,7 @@ def get_iGPK(
     # Optional MLE hyperparameter optimization
     # ------------------------------------------------------------
     ObsManager.optimize_hyperparameters(
-        num_iter=100, lr=0.01, opt_noise=True)
+        num_iter=200, lr=0.1, opt_noise=True)
 
     # ------------------------------------------------------------
     # Koopman A, C from full training data
@@ -561,6 +665,10 @@ def get_iGPK(
     A, C = gpk.getKoopman(ObsManager, X, Xplus, nTrain, stateAug=False)
 
     t_iGPK = time.perf_counter() - t0
+    if torch.cuda.is_available():
+        gpu_mem = torch.cuda.memory_allocated(device) / (1024 ** 2),
+    else:
+        gpu_mem = 0.0
 
     # ------------------------------------------------------------
     # Train/test rollout evaluation
@@ -587,22 +695,18 @@ def get_iGPK(
     # Post-MLE full cost
     # ------------------------------------------------------------
     with torch.no_grad():
-        G_X_post, G_Xplus_post = build_G_cache(ObsManager, X, Xplus)
-        G_X_post = G_X_post.to(device=device)
-        G_Xplus_post = G_Xplus_post.to(device=device)
-
-        post_mle_cost = get_cost_simple_fast(
+        post_mle_cost = get_full_cost_streamed(
             optimal_Z,
             X_dev,
-            G_X_post,
-            G_Xplus_post,
+            Xplus_dev,
+            ObsManager,
             lambda1=lam1,
             lambda2=lam2,
             lambda3=lam3,
             Mp_X0=Mp_X0,
             Mp_X=Mp_X,
             Mp_Xplus=Mp_Xplus,
-            num_total_samples=None,
+            chunk_size=N * traj_batch_size,
         )
     print(f'Num perturbations: {num_perturb}, Final full cost: {post_mle_cost:.6f}')
     # ------------------------------------------------------------
@@ -634,6 +738,7 @@ def get_iGPK(
             "best_iter": best_iter,
             "best_full_cost": best_full_cost,
             "opt_time": t_iGPK,
+            "opt_memory_MB": gpu_mem,
             "mean_grad": grad_history,
             "checkpoints": checkpoints,
             "post_mle_cost": post_mle_cost.detach().cpu(),
@@ -645,22 +750,22 @@ def get_iGPK(
 if __name__ == "__main__":
     import warnings
     warnings.filterwarnings("ignore")
-    SYSTEM_NAME = 'Lorenz96_8D'
-    TRAIN_FRAC, TEST_FRAC = 0.8, 0.2
-    CLIP = 50
-    LIFTING_ORDER = 50
+    SYSTEM_NAME = 'Cart_data'
+    TRAIN_FRAC, TEST_FRAC = 0.6, 0.4
+    CLIP = None
+    LIFTING_ORDER = 35
     NOISE_TYPE = 'gaussian'
     NOISE_INTENSITY = 0.0
     NOISE_SEED = 100
     # unused, samples, iterations, inner iterations
-    MAX_ITER = int(500_000)
+    MAX_ITER = int(500)
     OPT_WEIGHTS = [1.0, 1.0, 0.0]
-    ROUTINE = "multi-perturb"  # OR "multi-perturb"
+    ROUTINE = "standard"  # OR "multi-perturb"
     TRAIN_METHOD = "Zero-Mean"
     DEVICE = "cuda:0"
     SEED_Z = 1234
     SEED_HP = 1234
-    traj_batch_size = 32
+    traj_batch_size = 15
     FULL_COST_EVAL_EVERY = 50
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
@@ -683,7 +788,7 @@ if __name__ == "__main__":
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 3 * nTrain
+    Ns_gpo = 1 * nTrain
     Dataset['SimData'] = SimData
     Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
                             dim=1)  # (nx, N*nTrain)
@@ -704,8 +809,8 @@ if __name__ == "__main__":
         nTest=nTest,
         lifting_order=LIFTING_ORDER,
         max_iter=MAX_ITER,
-        sgd_lr=1e-2,
-        sgd_m=0.8,
+        sgd_lr=2e-3,
+        sgd_m=0.75,
         stop_tol=1e-4,
         opt_weights=OPT_WEIGHTS,
         routine=ROUTINE,
@@ -719,6 +824,7 @@ if __name__ == "__main__":
         traj_batch_size=traj_batch_size,
         full_cost_eval_every=FULL_COST_EVAL_EVERY,
     )
+    print(f'{results["history"]['iters']}')
 
     if True:    # All Post-Processing and Outputs
         # unpack iGPK
@@ -783,7 +889,7 @@ if __name__ == "__main__":
         ax2.tick_params(axis='y', labelcolor=color)
         fig.tight_layout()
 
-        print(f'Post-MLE Full Cost: {results['history']['post_mle_cost']:.3e}')
+        print(f"Post-MLE Full Cost: {results['history']['post_mle_cost']:.3e}")
         # plt.plot(results["history"]['mean_grad'])
 
         ### NLPD Calulation

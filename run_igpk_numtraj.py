@@ -116,12 +116,12 @@ def _write_text_summary(path: Path, payload: dict) -> None:
         f"  Mean   : {payload['test_nlpd']['mean']:.3f}",
         f"  Median : {payload['test_nlpd']['median']:.3f}",
         "",
-        "GPU Memory:",
-        f"  Device              : {gpu_memory['device']}",
-        f"  Peak Allocated [MB] : {_format_optional_mb(gpu_memory['peak_allocated_mb'])}",
-        f"  Peak Reserved [MB]  : {_format_optional_mb(gpu_memory['peak_reserved_mb'])}",
-        f"  Final Allocated [MB]: {_format_optional_mb(gpu_memory['final_allocated_mb'])}",
-        f"  Final Reserved [MB] : {_format_optional_mb(gpu_memory['final_reserved_mb'])}",
+        f"GPU Memory: {gpu_memory}",
+        # f"  Device              : {gpu_memory['device']}",
+        # f"  Peak Allocated [MB] : {_format_optional_mb(gpu_memory['peak_allocated_mb'])}",
+        # f"  Peak Reserved [MB]  : {_format_optional_mb(gpu_memory['peak_reserved_mb'])}",
+        # f"  Final Allocated [MB]: {_format_optional_mb(gpu_memory['final_allocated_mb'])}",
+        # f"  Final Reserved [MB] : {_format_optional_mb(gpu_memory['final_reserved_mb'])}",
         "",
         "Configuration:",
         json.dumps(payload["config"], indent=2),
@@ -201,7 +201,7 @@ def main() -> int:
     if num_test <= 0:
         raise ValueError("--num-test must be positive.")
 
-    total_traj = 440 # num_train + num_test
+    total_traj = 540 # num_train + num_test
     tag = args.tag or f"numtrain_{num_train:04d}"
     txt_path = outdir / f"{tag}.txt"
     json_path = outdir / f"{tag}.json"
@@ -284,7 +284,8 @@ def main() -> int:
 
         train_nrmse_traj = _trajwise_mean(TrainNRMSE)
         test_nrmse_traj = _trajwise_mean(TestNRMSE)
-        gpu_memory = _get_cuda_memory_summary(device)
+        gpu_memory = results["history"]["opt_memory_MB"]
+        # _get_cuda_memory_summary(device)
 
         payload = {
             "system": args.system,
@@ -301,6 +302,7 @@ def main() -> int:
             "train_nlpd": _summary_stats(train_nlpd),
             "test_nlpd": _summary_stats(test_nlpd),
             "gpu_memory": gpu_memory,
+            "total_iters": results["history"]["iters"],
             "files": {
                 "text_summary": str(txt_path),
                 "json_summary": str(json_path),
