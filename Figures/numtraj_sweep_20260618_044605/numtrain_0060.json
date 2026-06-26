@@ -1,0 +1,52 @@
+{
+  "system": "unforced_poc",
+  "num_total_trajectories": 540,
+  "num_train_trajectories": 60,
+  "num_test_trajectories": 40,
+  "nlpd_first_kept_step": 2,
+  "nlpd_last_kept_step": 97,
+  "nlpd_num_time_steps_used": 96,
+  "computation_time_seconds": 112.58967780007515,
+  "final_train_cost": 0.023101726546883583,
+  "train_nrmse": {
+    "mean": 0.0483454205095768,
+    "median": 0.039352476596832275
+  },
+  "test_nrmse": {
+    "mean": 0.05303313210606575,
+    "median": 0.03643353283405304
+  },
+  "train_nlpd": {
+    "mean": -2.143932580947876,
+    "median": -2.4090771675109863
+  },
+  "test_nlpd": {
+    "mean": -1.7385940551757812,
+    "median": -2.2852137088775635
+  },
+  "gpu_memory": [
+    346.208984375
+  ],
+  "total_iters": 2550,
+  "files": {
+    "text_summary": "Figures\\numtraj_sweep_20260618_044605\\numtrain_0060.txt",
+    "json_summary": "Figures\\numtraj_sweep_20260618_044605\\numtrain_0060.json"
+  },
+  "config": {
+    "lifting_order": 35,
+    "max_iter": 100000,
+    "learn_rate": 0.002,
+    "device": "cuda:0",
+    "train_method": "Zero-Mean",
+    "routine": "standard",
+    "hp1_scale": 1.0,
+    "hp2_init": 2.5048575401306152,
+    "opt_weights": [
+      1.0,
+      1.0,
+      0.0
+    ],
+    "seed_z": 1234,
+    "seed_hp": 1234
+  }
+}
