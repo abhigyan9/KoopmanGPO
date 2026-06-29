@@ -1,6 +1,7 @@
 from __future__ import annotations
 import itertools
 import torch
+import time
 from .autonomous import sim_LTI
 from .utilities import get_kmeans, sim_and_eval
 from .GPObs import GPObservablesManager
@@ -84,12 +85,14 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
     def phi_batch(X): return generate_basis_batch(X, poly_deg)
 
     # Lift state with generated polynomial basis functions
+    t0 = time.perf_counter()
     phi_x = phi_batch(X)
     phi_xplus = phi_batch(Xplus)
 
     # Compute eDMD matrices
     A_edmd = phi_xplus @ torch.linalg.pinv(phi_x)
     C_edmd = X @ torch.linalg.pinv(phi_x)
+    training_time = float(time.perf_counter() - t0)
     p = C_edmd.shape[1]
 
     # ---------- Training ----------
@@ -137,7 +140,7 @@ def eDMD_poly(SimData, nTrain, nTest, poly_deg=1):
     XedTrain, XedTest = XedTrain.detach(), XedTest.detach()
     TestNRMSE_eDMD, TrainNRMSE_eDMD = TestNRMSE_eDMD.detach(), TrainNRMSE_eDMD.detach()
 
-    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD
+    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD, training_time
 
 
 # eDMD based on Radial Basis Function Observables
@@ -242,6 +245,7 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
                           for j in range(nTest)], dim=1)
 
+    t0 = time.perf_counter()
     centers = get_kmeans(X, num_centers)
 
     # Lift the data.
@@ -258,7 +262,7 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
             C_edmd[i, i] = 1.
     else:
         C_edmd = X @ torch.linalg.pinv(phi_x)
-
+    training_time = float(time.perf_counter() - t0)
     # Evaluate on the training set.
     ZedTrain = torch.zeros((nTrain, p, N))
     XedTrain = torch.zeros((nTrain, n, N))
@@ -299,7 +303,7 @@ def eDMD_RBF_kmeans(SimData, nTrain, nTest, num_centers, width=None, rbf_type='g
     XedTrain, XedTest = XedTrain.detach(), XedTest.detach()
     TrainNRMSE_eDMD, TestNRMSE_eDMD = TrainNRMSE_eDMD.detach(), TestNRMSE_eDMD.detach()
 
-    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD
+    return A_edmd, C_edmd, XedTrain, XedTest, TrainNRMSE_eDMD, TestNRMSE_eDMD, training_time
 
 
 # Subspace Identification driven GP-Koopman
@@ -587,9 +591,12 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
     ICsetTest = torch.cat([SimData[j, :, 0].view(n, 1)
                           for j in range(nTest)], dim=1)
 
+    t0 = time.perf_counter()
     # Multi-Trajectory Subspace Identification
     A, B, C, D, z0_lift = SSID(
         ssid_U, ssid_Y, delay=delay, sys_dim=lifting_order)
+    
+    print(f'SSID done with delay = {delay}')
 
     # Gaussian Process Regression
     ObsManager = GPObservablesManager()
@@ -598,12 +605,12 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
             index=i, d=C.shape[0], Ns=z0_lift.shape[1], 
             kernel=GaussianKernel(), noise=1e-4, device='cpu',
         )
-    ObsManager.set_random_hyperparameters(scale=[1., 1., None])
+    ObsManager.set_random_hyperparameters(scale=[None, 1., None])
     for i in range(lifting_order):
         ObsManager.train_observable(i, ssid_Y[:, :, 0].mT, z0_lift[i, :].unsqueeze(dim=1))
 
-    ObsManager.optimize_hyperparameters(num_iter=100, lr=0.01, opt_noise=True)
-
+    ObsManager.optimize_hyperparameters(num_iter=200, lr=0.1, opt_noise=True)
+    training_time = float(time.perf_counter() - t0)
     # Trajectory Simulation and Model Evaluation
     XhatTrain, XcvTrain, TrainNRMSE = sim_and_eval(
         ObsManager, A, C, ICsetTrain, SimData, traj_offset=nTest)
@@ -624,5 +631,6 @@ def get_ssidgpk(SimData: torch.tensor, nTrain: int, nTest: int, lifting_order: i
             "Xhat": XhatTest,            # (nTest, n, N)
             "Xcv":  XcvTest,             # (nTest, n, n, N)
             "NRMSE": TestNRMSE           # (nTest, n)
-        }
+        },
+        "time": training_time,
     }

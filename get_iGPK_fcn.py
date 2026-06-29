@@ -290,6 +290,7 @@ def get_iGPK(
     routine: str = "standard",        # OR "multi-perturb" - to be implemented
     train_method: str = "Zero-Mean",  # Zero-Mean | Monomials
     hp_scale: list[float] = [None, 1.0, None],  # [hp1, hp2, _]
+    gp_noise: float = 1e-6,
     device: str | torch.device = "cuda:0",
     seed_z: int = 1234,
     seed_hp: int = 1234,
@@ -336,15 +337,15 @@ def get_iGPK(
         torch.manual_seed(seed=seed_z)
 
         Z_raw = torch.zeros((Ns_gpo, nz))
-        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2,3))
+        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2))
         num_monomial_means = min(nz, len(monomial_powers))
 
         for i in range(nz):
             if i < num_monomial_means:
                 monomial = gpk.MonomialMean(powers=monomial_powers[i])
                 Z_raw[:, i] = monomial(Xtrain).squeeze(dim=1)
-            else:
-                Z_raw[:, i] += torch.rand(Ns_gpo, 1).squeeze(dim=1)
+            # else:
+            Z_raw[:, i] += torch.rand(Ns_gpo, 1).squeeze(dim=1)
 
         Z = torch.nn.Parameter(Z_raw.to(device=device))
 
@@ -356,11 +357,11 @@ def get_iGPK(
                 Ns=Ns_gpo,
                 kernel=kernel,
                 prior_mean=None,
-                noise=1e-6,
+                noise=gp_noise,
                 device=device,
                 beta=20.0,
                 thresh=20.0,
-                eps=1e-12,
+                eps=gp_noise**2,
             )
 
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
@@ -390,11 +391,11 @@ def get_iGPK(
                 Ns=Ns_gpo,
                 kernel=kernel,
                 prior_mean=prior_mean,
-                noise=1e-6,
+                noise=gp_noise,
                 device=device,
                 beta=20.0,
                 thresh=20.0,
-                eps=1e-12,
+                eps=gp_noise**2,
             )
 
         ObsManager.set_random_hyperparameters(seed=seed_hp, scale=hp_scale)
@@ -772,7 +773,6 @@ if __name__ == "__main__":
         SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
     print(f'num_train: {nTrain}, num_test: {nTest}, num_steps: {N}')
 
-    # SimData_raw = torch.flip(SimData_raw, dims=[0])
     SimData_clean, mu_vec, std_vec = gpk.normalize_data(
         SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
 

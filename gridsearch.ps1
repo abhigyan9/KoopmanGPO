@@ -3,10 +3,11 @@ param(
     [int]$MaxJobs = 2,
 
     [string]$PythonExe = "python",
-    [string]$SystemName = "Lorenz96_8D",
+    [string]$SystemName = "Inhibited Predator-Prey",
     [string]$DateStamp = (Get-Date -Format "yyyyMMdd"),
-    [int]$LiftingOrder = 100,
-    [int]$MaxIter = 200000,
+    [int]$LiftingOrder = 10,
+    [int]$MaxIter = 50000,
+    [float]$TrainFrac = 0.6,
     [string]$Device = "cuda:0",
     [int]$SeedZ = 1234,
     [int]$SeedHP = 1234,
@@ -16,9 +17,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Edit these lists to define the grid.
-$LearnRates = @(0.1, 0.02, 0.01, 0.002, 0.001)
-$Momentums = @(0.7, 0.75, 0.8)
-$StopTols = @(1e-4 , 1e-3)
+$LearnRates = @(0.01, 0.002, 0.001)
+$Momentums = @(0.75, 0.8)
+$StopTols = @(1e-4)
 $TrajBatchSizes = @(16, 20)
 
 $Root = $PSScriptRoot
@@ -92,6 +93,7 @@ foreach ($combo in $combos) {
         "--system-name", "$SystemName",
         "--lifting-order", "$LiftingOrder",
         "--max-iter", "$MaxIter",
+        "--train-frac", "$TrainFrac",
         "--device", "$Device",
         "--seed-z", "$SeedZ",
         "--seed-hp", "$SeedHP",

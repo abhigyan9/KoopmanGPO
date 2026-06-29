@@ -334,7 +334,7 @@ def _save_latex_table(results_dict, outdir, fname_stub: str):
 
 
 def run_models_for_noise(
-    system_name: str,
+    system_name: str, *,
     train_frac: float,
     test_frac: float,
     clip: int | None,
@@ -344,13 +344,13 @@ def run_models_for_noise(
     outdir: str = "Figures",
     normalizeData: bool = True,
     # modeling knobs
-    lifted_order: int = 10,
-    poly_deg: int = 3,
-    max_iter: int = 1000,
-    learn_rate: float = 0.01,
-    kernel_hp_scale: list[float | None] = [None, 1.0, None],
+    lifted_order: int = 10, poly_deg: int = 3,
+    max_iter: int = 1000, epoch_iters: int = 50,
+    learn_rate: float = 0.01, momentum: float = 0.8,
+    batch_size: int = 15, stop_tol: float = 1e-4,
+    kernel_hp_scale: list[float | None] = [None, 1.0, None], gp_noise:float=1e-6,
     opt_weights: list[float] = [1.0, 1.0, 1.0],
-    routine: str = "multi-perturb",
+    routine: str = "standard",
     train_method: str = "Zero-Mean",
     device: str = "cuda:0",
 ):
@@ -366,9 +366,9 @@ def run_models_for_noise(
     # 1) Load + normalize
     SimData_raw, ts, num_traj, N, nTrain, nTest = gpk.load_SimData(
         system_name, train_frac, test_frac, clip=clip)
-    # SimData_raw = torch.flip(SimData_raw, dims=[0])
+
     if normalizeData:
-        SimData_clean, mu_vec, std_vec = gpk.normalize_data(
+        SimData_clean, _, _ = gpk.normalize_data(
             SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)
     else:
         SimData_clean = SimData_raw.to(dtype=torch.float32)
@@ -380,7 +380,7 @@ def run_models_for_noise(
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 3 * nTrain
+    Ns_gpo = 2 * nTrain
     
     Dataset['SimData'] = SimData
     Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],
@@ -407,11 +407,11 @@ def run_models_for_noise(
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
         max_iter=max_iter,
-        sgd_lr=learn_rate,sgd_m=0.8, stop_tol=1e-4,
+        sgd_lr=learn_rate,sgd_m=momentum, stop_tol=stop_tol,
         opt_weights=opt_weights,
         routine=routine, train_method=train_method,
-        hp_scale=kernel_hp_scale, device=device,
-        traj_batch_size=32, full_cost_eval_every=50,
+        hp_scale=kernel_hp_scale, device=device, gp_noise=gp_noise,
+        traj_batch_size=batch_size, full_cost_eval_every=epoch_iters,
     )
     t_iGPK = results['history']['opt_time']
 
@@ -424,25 +424,22 @@ def run_models_for_noise(
         "Xhat"],  results["Test"]["Xcv"],  results["Test"]["NRMSE"]
 
     # 4) eDMDs
-    t0 = time.perf_counter()
-    _, _, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly = gpk.eDMD_poly(
+    _, _, XhatTrain_poly, XhatTest_poly, TrainNRMSE_poly, TestNRMSE_poly, t_poly = gpk.eDMD_poly(
         SimData, nTrain, nTest, poly_deg=poly_deg)
-    t_poly = time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    _, _, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf = gpk.eDMD_RBF_kmeans(
+    _, _, XhatTrain_rbf, XhatTest_rbf, TrainNRMSE_rbf, TestNRMSE_rbf, t_rbf = gpk.eDMD_RBF_kmeans(
         SimData, nTrain, nTest, num_centers=lifted_order, width=kernel_hp_scale[1],
         rbf_type='gaussian', state_aug=True)
-    t_rbf = time.perf_counter() - t0
 
     # 5) SSID-GPK
-    t0 = time.perf_counter()
+    # delay = math.ceil(lifted_order / nx)
+    delay=8
     results_ssid = gpk.get_ssidgpk(
         SimData=SimData,
         nTrain=nTrain, nTest=nTest,
         lifting_order=lifted_order,
-        delay=6)
-    t_ssid = time.perf_counter() - t0
+        delay=delay)
+    t_ssid = results_ssid["time"]
 
     # unpack SSID-GPK results
     # A_ssid, C_ssid = results_ssid["A"], results_ssid["C"]

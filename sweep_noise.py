@@ -36,11 +36,25 @@ parser.add_argument("--poly_deg", type=int,
 
 parser.add_argument("--max_iter", type=int,
                     default=2000,
-                    help="Maximum Iterations for iGPK")
+                    help="iGPK: Maximum Iterations")
 
 parser.add_argument("--learn_rate", type=float,
-                    default=0.001,
-                    help="Learning Rate for iGPK")
+                    default=0.001, help="iGPK: SGD Learning Rate")
+
+parser.add_argument("--momentum", type=float,
+                    default=0.8, help="iGPK: SGD Momentum")
+
+parser.add_argument("--batch_size", type=int,
+                    default=15, help="iGPK: Trajectories per batch")
+
+parser.add_argument("--stop_tol", type=float,
+                    default=1e-4, help="iGPK: Stopping Tolerance")
+
+parser.add_argument("--epoch_iters", type=float,
+                    default=50, help="iGPK: Iterations per epoch")
+
+parser.add_argument("--gp_noise", type=float,
+                    default=1e-6, help="Noise assumption for GPOs (iGPK and SSID-GPK)")
 
 parser.add_argument("--train_frac", type=float,
                     default=0.60,
@@ -60,11 +74,16 @@ LIFTED_ORDER = int(args.lifted_order)
 POLY_DEG = int(args.poly_deg)
 MAX_ITER = int(args.max_iter)
 LEARN_RATE = float(args.learn_rate)
+MOMENTUM = float(args.momentum)
+BATCH_SIZE = int(args.batch_size)
+STOP_TOL = float(args.stop_tol)
+EPOCH_ITERS = float(args.epoch_iters)
+GP_NOISE = float(args.gp_noise)
 TRAIN_FRAC = float(args.train_frac)
 DIRECTORY = args.directory
 
 TEST_FRAC = 1 - TRAIN_FRAC
-CLIP = 50
+CLIP = None
 NORMALIZE_DATA = True
 
 SEEDS = [100]
@@ -104,9 +123,9 @@ for noise_type, intensity, seed in itertools.product(NOISE_TYPES, INTENSITIES, S
         seed=seed,
         outdir=OUTDIR,
         normalizeData=NORMALIZE_DATA,
-        lifted_order=LIFTED_ORDER,
-        poly_deg=POLY_DEG,
-        max_iter=MAX_ITER,
-        learn_rate=LEARN_RATE,
+        lifted_order=LIFTED_ORDER, poly_deg=POLY_DEG,
+        max_iter=MAX_ITER, epoch_iters=EPOCH_ITERS, batch_size=BATCH_SIZE,
+        learn_rate=LEARN_RATE, momentum=MOMENTUM,
+        stop_tol=STOP_TOL, gp_noise=GP_NOISE,
         kernel_hp_scale=[None, hp_scale, None],
     )

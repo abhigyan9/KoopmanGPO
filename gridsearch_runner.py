@@ -142,7 +142,7 @@ def build_dataset(args):
     dataset = {}
     nx = sim_data.shape[1]
     n_steps = sim_data.shape[2] - 1
-    ns_gpo = 1 * n_train
+    ns_gpo = 2 * n_train
 
     dataset["SimData"] = sim_data
     dataset["X"] = torch.cat(
