@@ -1,6 +1,7 @@
 # Ignore the virtual environment folder
 kvenv/
 .gpk312/
+Figures/GridSearch/
 
 # Ignore compiled Python files
 __pycache__/
