@@ -60,6 +60,12 @@ parser.add_argument("--train_frac", type=float,
                     default=0.60,
                     help="Fraction of Trajectories to use for Training [must be less than 1]")
 
+parser.add_argument("--test_frac", type=float,
+                    default=0.0, help="Fraction of Trajectories for Test set.")
+
+parser.add_argument("--clip", type=int,
+                    default=0, help='No clipping at 0.')
+
 parser.add_argument("--directory", type=str, default='Figures/Journal/',
                     help="Enter relative path to Directory ending with /")
 args = parser.parse_args()
@@ -81,9 +87,16 @@ EPOCH_ITERS = float(args.epoch_iters)
 GP_NOISE = float(args.gp_noise)
 TRAIN_FRAC = float(args.train_frac)
 DIRECTORY = args.directory
+if args.clip == 0:
+    CLIP = None
+else:
+    CLIP = int(args.clip)
 
-TEST_FRAC = 1 - TRAIN_FRAC
-CLIP = None
+if args.test_frac == 0.0:
+    TEST_FRAC = 1 - TRAIN_FRAC
+else:
+    TEST_FRAC = min(args.test_frac, 1-TRAIN_FRAC)
+
 NORMALIZE_DATA = True
 
 SEEDS = [100]
@@ -93,7 +106,7 @@ os.makedirs(OUTDIR, exist_ok=True)
 # Find Scale of Hyperparameter Initialization
 SimData_raw, _, _, N, nTrain, nTest = gpk.load_SimData(
     SYSTEM_NAME, TRAIN_FRAC, TEST_FRAC, clip=CLIP)
-# SimData_raw = torch.flip(SimData_raw, dims=[0])
+SimData_raw = torch.flip(SimData_raw, dims=[0])
 if NORMALIZE_DATA:
     SimData_clean, _, _ = gpk.normalize_data(
         SimData_raw.to(dtype=torch.float32), nTest, nTrain, N)

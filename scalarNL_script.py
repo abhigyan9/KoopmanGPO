@@ -380,7 +380,7 @@ def run_models_for_noise(
     Dataset = {}
     nx = SimData.shape[1]
     N = SimData.shape[2] - 1
-    Ns_gpo = 2 * nTrain
+    Ns_gpo = 1 * nTrain
     
     Dataset['SimData'] = SimData
     Dataset['X'] = torch.cat([SimData[nTest+j, :, 0:N] for j in range(nTrain)],

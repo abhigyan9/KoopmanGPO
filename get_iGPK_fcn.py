@@ -337,7 +337,7 @@ def get_iGPK(
         torch.manual_seed(seed=seed_z)
 
         Z_raw = torch.zeros((Ns_gpo, nz))
-        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2))
+        monomial_powers = generate_monomial_powers(nx, total_orders=(1,2,3))
         num_monomial_means = min(nz, len(monomial_powers))
 
         for i in range(nz):
